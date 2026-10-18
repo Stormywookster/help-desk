@@ -25,6 +25,20 @@ export function isAncestorOfBootstrap(sha, bootstrap, root = repoRoot()) {
   throw new Error(`main-guard: merge-base failed for ${sha}`);
 }
 
+export function commitParentCount(sha, root = repoRoot()) {
+  if (!SHA.test(sha)) return null;
+  const listed = git(root, ["rev-list", "--parents", "-n", "1", sha]);
+  if (listed.status !== 0) return null;
+  const parts = listed.stdout
+    .trim()
+    .split(/\s+/)
+    .filter((part) => part.length > 0);
+  if (parts.length === 0 || parts[0].toLowerCase() !== sha.toLowerCase()) {
+    return null;
+  }
+  return parts.length - 1;
+}
+
 export function bootstrapChanged(sha, root = repoRoot()) {
   if (!SHA.test(sha)) throw new Error(`main-guard: refusing non-sha ${sha}`);
   const diff = git(root, [
@@ -211,7 +225,20 @@ export async function handleStatus(event, ctx) {
   return issue;
 }
 
-export async function loadCommit(sha, github, texts) {
+export async function loadCommit(sha, github, texts, root = repoRoot()) {
+  if (commitParentCount(sha, root) === 0) {
+    return {
+      sha,
+      pulls: [],
+      checks: {},
+      files: [],
+      comments: [],
+      listText: texts.listText,
+      codeowners: texts.codeowners,
+      plan: texts.plan,
+      parentless: true,
+    };
+  }
   const pulls = await github.pullsForCommit(sha);
   const merged = (pulls ?? []).find(
     (pull) => pull.merged_at && pull.merge_commit_sha === sha,
@@ -235,7 +262,7 @@ export async function loadCommit(sha, github, texts) {
     listText: texts.listText,
     codeowners: texts.codeowners,
     plan: texts.plan,
-    bootstrapChanged: bootstrapChanged(sha),
+    bootstrapChanged: bootstrapChanged(sha, root),
   };
 }
 

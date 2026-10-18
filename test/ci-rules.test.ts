@@ -20,6 +20,7 @@ import {
   handlePush,
   handleStatus,
   isAncestorOfBootstrap,
+  loadCommit,
   pickConclusions,
 } from "../scripts/ci/main-guard.mjs";
 import { gitleaksArgs, titleOk } from "../scripts/ci/pr-meta.mjs";
@@ -602,6 +603,87 @@ describe("provenance", () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  it("[AC-OPS-59] a pushed commit with no parent fails closed and opens or comments on the main-guard issue", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "guard-root-"));
+    try {
+      runGit(["init"], dir);
+      runGit(["config", "user.email", "test@example.com"], dir);
+      runGit(["config", "user.name", "test"], dir);
+      writeFileSync(join(dir, "README.md"), "root\n");
+      runGit(["add", "README.md"], dir);
+      runGit(["commit", "-m", "root"], dir);
+      const sha = headSha(dir);
+      const texts = { listText: "", codeowners: "", plan: "" };
+      const opened: { action?: string; body?: string; labels?: string[] }[] =
+        [];
+      const openResult = await handlePush(
+        {
+          forced: false,
+          deleted: false,
+          before: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          after: sha,
+        },
+        {
+          github: {
+            async compare() {
+              return { status: "ahead", commits: [{ sha }] };
+            },
+            async listIssues() {
+              return [];
+            },
+            async apply(planIssue: { action?: string; body?: string }) {
+              opened.push(planIssue);
+            },
+          },
+          predates: () => false,
+          loadCommit: (commitSha: string) =>
+            loadCommit(commitSha, {}, texts, dir),
+        },
+      );
+      assert.equal(openResult.ok, false);
+      assert.equal(opened.length, 1);
+      assert.equal(opened[0]?.action, "open");
+      assert.deepEqual(opened[0]?.labels, ["main-guard"]);
+      assert.match(opened[0]?.body ?? "", new RegExp(sha));
+      assert.match(opened[0]?.body ?? "", /commit has no parent/);
+      assert.match(opened[0]?.body ?? "", /revert through a pull request/);
+
+      const commented: { action?: string; number?: number; body?: string }[] =
+        [];
+      const commentResult = await handlePush(
+        {
+          forced: false,
+          deleted: false,
+          before: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          after: sha,
+        },
+        {
+          github: {
+            async compare() {
+              return { status: "ahead", commits: [{ sha }] };
+            },
+            async listIssues() {
+              return [{ number: 4, state: "open", labels: ["main-guard"] }];
+            },
+            async apply(planIssue: { action?: string; number?: number }) {
+              commented.push(planIssue);
+            },
+          },
+          predates: () => false,
+          loadCommit: (commitSha: string) =>
+            loadCommit(commitSha, {}, texts, dir),
+        },
+      );
+      assert.equal(commentResult.ok, false);
+      assert.equal(commented.length, 1);
+      assert.equal(commented[0]?.action, "comment");
+      assert.equal(commented[0]?.number, 4);
+      assert.match(commented[0]?.body ?? "", /commit has no parent/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("guard issues", () => {
@@ -1038,19 +1120,30 @@ describe("workflows", () => {
     }
   });
 
-  it("runs Semgrep CE in fast on p/secrets and p/javascript at ERROR", () => {
+  it("runs Semgrep CE in fast from vendored rules with hash-pinned dependencies", () => {
     const text = workflowText("ci.yml");
     assert.doesNotMatch(text, /TODO\(M0-T04c\)/);
-    assert.match(text, /semgrep==1\.181\.0/);
-    assert.match(text, /--config p\/secrets/);
-    assert.match(text, /--config p\/javascript/);
+    assert.match(text, /--config \.semgrep\//);
+    assert.match(text, /--require-hashes/);
     assert.match(text, /--severity ERROR/);
     assert.match(text, /--error\b/);
     assert.match(text, /--metrics=off/);
+    assert.doesNotMatch(text, /--config p\//);
     assert.doesNotMatch(text, /SEMGREP_APP_TOKEN|semgrep login|semgrep ci\b/);
     const fastSteps = workflow("ci.yml").jobs.fast.steps as { run?: string }[];
-    const scan = fastSteps.find((step) => step.run?.includes("semgrep=="));
-    assert.match(scan?.run ?? "", /\nsemgrep scan --config p\/secrets/);
+    const scan = fastSteps.find((step) => step.run?.includes("semgrep scan"));
+    assert.match(
+      scan?.run ?? "",
+      /--require-hashes -r ci\/semgrep-requirements\.txt/,
+    );
+    assert.match(scan?.run ?? "", /\nsemgrep scan --config \.semgrep\//);
+    assert.doesNotMatch(scan?.run ?? "", /--config p\//);
+    const requirements = readFileSync(
+      join(root, "ci/semgrep-requirements.txt"),
+      "utf8",
+    );
+    assert.match(requirements, /^semgrep==1\.181\.0 \\$/m);
+    assert.match(requirements, /--hash=sha256:/);
     const fullSteps = workflow("ci.yml").jobs.full.steps as { run?: string }[];
     assert.equal(
       fullSteps.some((step) => (step.run ?? "").includes("semgrep")),

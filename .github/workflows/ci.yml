@@ -77,9 +77,9 @@ jobs:
       - run: npm run verify
       - name: Semgrep CE
         run: |
-          python3 -m pip install --user --disable-pip-version-check --break-system-packages 'semgrep==1.181.0'
+          python3 -m pip install --user --disable-pip-version-check --break-system-packages --require-hashes -r ci/semgrep-requirements.txt
           export PATH="${HOME}/.local/bin:${PATH}"
-          semgrep scan --config p/secrets --config p/javascript --severity ERROR --error --metrics=off --disable-version-check
+          semgrep scan --config .semgrep/ --severity ERROR --error --metrics=off --disable-version-check
       - run: echo "fast finished" > ci-step.txt
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
