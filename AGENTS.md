@@ -44,6 +44,8 @@ All bots share one GitHub identity, so GitHub approvals cannot be used. A review
 | Project Lead | M0 tasks, any scope change, M8-T03                                                                                                                                                                                                                                         |
 | Brandon      | never required                                                                                                                                                                                                                                                             |
 
+A PR that delivers ACs (its `Delivered:` line lists AC ids, or its title carries an M-task prefix) needs `REVIEW QA: APPROVED` on the current head before merge.
+
 `CODEOWNERS` is advisory. It records which role must comment. It does not request a GitHub review.
 
 The Project Lead may hold any PR by adding the `blocked` label. A held PR does not merge (plan §5.5).

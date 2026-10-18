@@ -2,7 +2,7 @@
 
 **Author:** Help Desk Engineer (bot team) | **Owner/approver:** Brandon Trout | **Date:** Oct 6, 2026
 **Status:** Draft for review by the Project Lead. Plan only; no code exists yet.
-**Built from:** the docs in this folder as of 10:19 AM ET (newest file time), ARCHITECTURE draft 3 with ADRs 0001–0019, `ACCEPTANCE_CRITERIA.md` revision 10 (510 acceptance criteria) and team decisions T1–T39 in `REQUIREMENTS_DISCOVERY.md`.
+**Built from:** the docs in this folder as of 12:32 PM ET (newest file time), ARCHITECTURE draft 3 with ADRs 0001–0019, `ACCEPTANCE_CRITERIA.md` revision 10.3 (511 acceptance criteria) and team decisions T1–T43 in `REQUIREMENTS_DISCOVERY.md`.
 **Policy:** the build follows `RESOURCE_EFFICIENCY_POLICY.md` (v2.0): tight task prompts, risk-based review (independent AI review only for risky areas such as CI, gitleaks and auth), at most 2 failed attempts per approach before stopping to report, and a stop after each approved stage for Brandon's go-ahead.
 
 ---
@@ -13,7 +13,7 @@
 - **How:** 55 small tasks in 10 milestones (M0–M9). Each task is one pull request (PR) written by one Cursor cloud agent. Every PR must pass automatic checks before it is merged.
 - **What Brandon sees:** each milestone ends in a demo. Up to M6 the demos are reports, screenshots, and videos produced by GitHub's automatic test runs. At M7 the beta runs on Brandon's Ubuntu VM at home; at M8 Brandon tries it and says yes or no.
 - **What Brandon does:** about 35 minutes of setup at the beta (Gmail App Password, a GitHub download token, the VM install, the Windows app), plus the final user test. A possible 2-minute GitHub check comes earlier, only if the first automatic test run doesn't start. Nothing else is required; he never has to approve a PR. During the beta there are two "only if needed" steps: H-22 sends a support bundle when the Project Lead asks (about 5 min), and H-21 pins or rolls back a version (2 min).
-- **Every acceptance criterion is covered:** all 510 AC IDs map to a task (Appendix A), and a script proves it (§4.3). None is deferred; a few can only be fully proven with Brandon at the beta (Appendix A, "Needs a human").
+- **Every acceptance criterion is covered:** all 511 AC IDs map to a task (Appendix A), and a script proves it (§4.3). None is deferred; a few can only be fully proven with Brandon at the beta (Appendix A, "Needs a human").
 - **Open questions:** listed in §8.3. None blocks starting M0.
 
 ## How to read this plan
@@ -27,7 +27,7 @@
 
 Terms: **PR** = pull request (a proposed change). **CI** = the automatic checks GitHub runs. **AC** = acceptance criterion in `ACCEPTANCE_CRITERIA.md` (e.g. `AC-LC-07`). **DoD** = definition of done. **∥** = can run in parallel. Times are Eastern (ET).
 
-**Source precedence** (as the brief and the docs require): `REQUIREMENTS_DISCOVERY.md` (LOCKED items, then team decisions T1–T39) → `ARCHITECTURE.md` and `adr/0001`–`0019` → `ACCEPTANCE_CRITERIA.md` for what "done" means → `DESIGN.md` (screen copy) and `EMAIL_AND_WORDING.md` (email text, T4). Where they still disagree, §8.3 lists the conflict instead of choosing silently.
+**Source precedence** (as the brief and the docs require): `REQUIREMENTS_DISCOVERY.md` (LOCKED items, then team decisions T1–T43) → `ARCHITECTURE.md` and `adr/0001`–`0019` → `ACCEPTANCE_CRITERIA.md` for what "done" means → `DESIGN.md` (screen copy) and `EMAIL_AND_WORDING.md` (email text, T4). Where they still disagree, §8.3 lists the conflict instead of choosing silently.
 
 ---
 
@@ -661,7 +661,7 @@ The DoD for **every** task also includes: `npm run verify` green locally; CI `pr
 #### M7-T03: Publishing, release pipeline, stack smoke
 - **Scope:** `release.yml` (ADR 0018): trigger `v[0-9]+.[0-9]+.[0-9]+` only; first job `gate` re-checks the tag against `^v[0-9]+\.[0-9]+\.[0-9]+$` and refuses the release if the commit isn't on `main`, `full` didn't pass on that exact SHA, the version isn't higher than the last release, or a `main-red`/`main-guard` issue is open. Then the Windows job (M6-T02) and both images; `X.Y.Z` is pushed, and `stable` is moved **last**, only after the Windows smoke test and both images succeed. Release notes are generated from the Conventional Commit titles merged since the last tag (T30). GHCR publishing of `edge` + `sha-*` from `main` only when `full` passes; `cleanup-images.yml` retention, stack smoke with a short E2E subset against the built images. Release procedure (§5.8): if `full` didn't run on the tagged commit, which is always the case when the tip of `main` is a docs-only commit, the releasing bot runs `ci.yml` manually (`workflow_dispatch`, which always runs `full`) before tagging, and `gate` refuses otherwise. Threat row TM-35 (release path) is the security reference for this task.
 - **Depends on:** M7-T02
-- **ACs:** AC-OPS-48 AC-OPS-49 AC-OPS-50
+- **ACs:** AC-OPS-48 AC-OPS-49 AC-OPS-50 AC-OPS-74
 - **Also exercises:** AC-OPS-01 AC-OPS-35
 - **DoD:** A tag produces images, installer asset and notes; smoke subset green against images; gate tests: `v1.2.3` accepted, `v1.2.3-rc.1`, `v1.2`, `1.2.3`, `v1.2.3+b` refused, and a release is refused while a `main-red` issue is open, or when `full` failed or was skipped (docs-only tip) on that SHA.
 - **Verification:** Release run link.
@@ -765,7 +765,7 @@ echo "Uncovered (must be empty):";  comm -23 /tmp/ac_defined.txt /tmp/ac_planned
 echo "Unknown IDs (must be empty):"; comm -13 /tmp/ac_defined.txt /tmp/ac_cited.txt
 ```
 
-Result when this plan was written: **defined 510, planned 510, uncovered 0, unknown 0.** After M0-T03, `npm run ac:report` does the stronger check: every AC has at least one test whose title carries its tag, grouped by task.
+Result when this plan was written: **defined 511, planned 511, uncovered 0, unknown 0.** After M0-T03, `npm run ac:report` does the stronger check: every AC has at least one test whose title carries its tag, grouped by task.
 
 ---
 
@@ -992,10 +992,10 @@ Only the steps the docs say a person must do, at the latest moment they're neede
 |---|---|---|---|---|---|---|---|
 | API | 15 | ATT | 25 | AUD | 32 | AUTH | 20 |
 | CLOSE | 21 | EM | 53 | FORM | 33 | GEN | 17 |
-| LC | 78 | LINK | 30 | OPS | 73 | PRI | 3 |
+| LC | 78 | LINK | 30 | OPS | 74 | PRI | 3 |
 | PRIV | 32 | RET | 2 | ROLE | 28 | SCOPE | 1 |
 | SET | 8 | SPAM | 15 | SRCH | 7 | VIS | 17 |
-| **Total** | **510** | | | | | | |
+| **Total** | **511** | | | | | | |
 
 | AC | Primary task | Also | Needs a human |
 |---|---|---|---|
@@ -1396,6 +1396,7 @@ Only the steps the docs say a person must do, at the latest moment they're neede
 | AC-OPS-71 | M7-T08 | — |  |
 | AC-OPS-72 | M7-T08 | — |  |
 | AC-OPS-73 | M7-T08 | — |  |
+| AC-OPS-74 | M7-T03 | — |  |
 | AC-PRI-01 | M1-T02 | M5-T04 |  |
 | AC-PRI-02 | M1-T10 | — |  |
 | AC-PRI-03 | M2-T03 | — |  |
@@ -1516,8 +1517,8 @@ Only the steps the docs say a person must do, at the latest moment they're neede
 
 | File | Modified (ET) |
 |---|---|
-| `ACCEPTANCE_CRITERIA.md` | Oct 18, 10:19:18 AM |
-| `ARCHITECTURE.md` | Oct 18, 10:19:18 AM |
+| `ACCEPTANCE_CRITERIA.md` | Oct 18, 12:23:39 PM |
+| `ARCHITECTURE.md` | Oct 18, 12:10:12 PM |
 | `BETA_USER_TEST.md` | Oct 18, 10:19:19 AM |
 | `CONSISTENCY_REPORT.md` | Oct 18, 10:19:18 AM |
 | `DESIGN.md` | Oct 18, 10:19:18 AM |
@@ -1526,8 +1527,8 @@ Only the steps the docs say a person must do, at the latest moment they're neede
 | `HELP_DESK_PRODUCT_REQUIREMENTS_BASELINE.md` | Oct 18, 10:19:19 AM |
 | `HUMAN_STEPS_LOG.md` | Oct 18, 10:19:18 AM |
 | `PHASE2_OPEN_QUESTIONS.md` | Oct 18, 10:19:18 AM |
-| `PROJECT_STATE.md` | Oct 18, 10:19:44 AM |
-| `REQUIREMENTS_DISCOVERY.md` | Oct 18, 10:19:18 AM |
+| `PROJECT_STATE.md` | Oct 18, 12:32:56 PM |
+| `REQUIREMENTS_DISCOVERY.md` | Oct 18, 12:09:57 PM |
 | `RESOURCE_EFFICIENCY_POLICY.md` | Oct 18, 10:19:18 AM |
 | `adr/0001-typescript-monorepo.md` | Oct 18, 10:19:18 AM |
 | `adr/0002-backend-stack.md` | Oct 18, 10:19:19 AM |
@@ -1547,8 +1548,8 @@ Only the steps the docs say a person must do, at the latest moment they're neede
 | `adr/0016-desktop-distribution.md` | Oct 18, 10:19:18 AM |
 | `adr/0017-public-submission-api-and-branding.md` | Oct 18, 10:19:19 AM |
 | `adr/0018-release-tagging.md` | Oct 18, 10:19:19 AM |
-| `adr/0019-main-guard.md` | Oct 18, 10:19:19 AM |
+| `adr/0019-main-guard.md` | Oct 18, 12:23:14 PM |
 | `brandon-answers-round2-2026-10-06.md` | Oct 18, 10:19:18 AM |
 
-Plan generated Oct 18, 10:21 AM ET. If any of these files changes, re-run §4.3 and update the affected tasks.
+Plan generated Oct 18, 2:04 PM ET. If any of these files changes, re-run §4.3 and update the affected tasks.
 
