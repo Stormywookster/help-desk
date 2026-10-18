@@ -168,7 +168,7 @@ All lifecycle and permission rules live in **`packages/shared`** as pure TypeScr
 | Actor / action | Allowed from | Result | Source |
 |---|---|---|---|
 | Customer submits | n/a | `new`, `needs_attention` set (T34), admin email | Q3, §7, T34 |
-| Staff accepts (self-assign) / assigns | any non-terminal | assignee set; if `new`, it becomes `open`; first acceptance recorded once (`first_accepted_by/at`). Moving a ticket out of `new` with no assignee assigns it to the person acting; unassigning doesn't change status (DESIGN OQ-30). Moving out of `new` is a status change, so it clears `needs_attention`; assignment alone doesn't (T34) | §6, §10, T34 |
+| Staff accepts (self-assign) / assigns | any non-terminal | assignee set; if `new`, it becomes `open`; first acceptance recorded once (`first_accepted_by/at`). Moving a ticket out of `new` with no assignee assigns it to the person acting, and that auto-assign also records first acceptance if none is recorded yet (T45); unassigning doesn't change status (DESIGN OQ-30). Moving out of `new` is a status change, so it clears `needs_attention`; assignment alone doesn't (T34) | §6, §10, T34 |
 | Staff changes status | from any of `new`, `open`, `in_progress`, `waiting_on_customer`, `resolved` **to** `open`, `in_progress`, `waiting_on_customer`, or `resolved` (any direction; never *to* `new`, never *to* `closed` by hand) | moving to `resolved` stamps `resolved_at` and `auto_close_due_at`; leaving `resolved` clears them; **clears `needs_attention`** (T34) | §11, DESIGN 2.4, T34 |
 | Staff changes priority | any non-terminal state (never on `closed`/`cancelled`) | priority set, event logged (staff-only); `needs_attention` unchanged | R6, T1 |
 | Staff adds an internal note | any state, including `closed`/`cancelled` (T1) | note added; status and `needs_attention` unchanged (T34) | T1, T34 |
@@ -180,9 +180,10 @@ All lifecycle and permission rules live in **`packages/shared`** as pure TypeScr
 | Customer replies | `new`, `open`, `in_progress` | message added, status unchanged, `needs_attention` | P2 |
 | Customer replies | `waiting_on_customer` | message added, status becomes `open`, `needs_attention` | §10 |
 | Customer replies | `resolved` | message added, **stays `resolved`, clock keeps running**, `needs_attention`, admin email | R1 |
-| Customer replies | `closed`, `cancelled` | rejected (read-only) | R1 |
+| Customer replies | `closed`, `cancelled` | rejected `409 TICKET_READ_ONLY` (T46) | R1, T46 |
 | Customer cancels (optional reason, posted as a customer message) | `new`, `open`, `in_progress`, `waiting_on_customer` | `cancelled`, no customer email; **staff alert** routed by B7; clears `needs_attention` automatically (reason `customer_cancelled`, T35); the cancel event is credited to the customer, the `needs_attention_cleared` event to System (T36) | P3, DESIGN C-06, B6, T14, T35 |
 | Customer reopens (optional message, posted in the same step) | `resolved` **and** now < `auto_close_due_at` | `open`, clock cleared, assignee kept, `needs_attention`, admin email; no cap on reopens | P1, P4, P5, DESIGN C-07 |
+| Customer cancels or reopens outside the states listed above (for example cancel on `resolved`/`closed`, or reopen after `auto_close_due_at`) | n/a | rejected `409 TICKET_READ_ONLY`, same code as staff (T46); the customer-facing message is owned by DESIGN | T46 |
 | Auto-close job | `resolved` and now ≥ `auto_close_due_at` | `closed`, actor = system, **no customer email** | P4, P8 |
 | Admin reopens | `closed` | `open`, no customer email; clears `needs_attention` (T34) | P7, P17, B6, T34 |
 | Admin restores | `cancelled` | `open`, no customer email; clears `needs_attention` (T34) | P7, P17, B6, T34 |
@@ -507,6 +508,7 @@ Stable machine `code`s include `VALIDATION_FAILED` (422), `UNAUTHENTICATED` (401
 - `GET /customer/ticket`: customer view: status, customer-visible events (`{ type, label, createdAt }`, no actor IDs or names), public messages (`{ id, authorType: "customer" | "support", authorDisplay: "You" | "Support team", body, createdAt, attachments }`), attachments (`{ id, fileName, sizeBytes, scanStatus }`), `canCancel`, `canReopen`, `canReply`. **No staff name, user ID, or email appears in any `/public` or `/customer` response (T26b)**; the customer schemas simply have no such fields, and the serializer drops anything not in the schema (§6.1).
 - `POST /customer/ticket/messages` (multipart: body + files).
 - `POST /customer/ticket/cancel` `{ reason? }` (≤500 chars), `POST /customer/ticket/reopen` `{ message? }`.
+- A customer reply, cancel or reopen in a state §4 doesn't allow returns `409 TICKET_READ_ONLY` (T46). The UI should already hide the action using `canReply`/`canCancel`/`canReopen`; the message text is owned by DESIGN.
 - `GET /customer/ticket/attachments/{id}`: download (clean files only).
 - `POST /customer/logout`.
 
@@ -1510,3 +1512,7 @@ Applied Brandon's Round 5 answers B1–B10 and the Project Lead's team decisions
 - **T36:** `needs_attention_cleared` events for `auto_closed` and `customer_cancelled` have `actor_type = system`; the customer-cancel status event stays credited to the customer and `auto_closed` to System (§4 rule and row, §5 actor type, §10, §16 tests).
 - **T39:** `SUPPORT_BUNDLE_DIR`, `--to`, and `BACKUP_TARGET_DIR` are resolved with `realpath` before the inside-the-backup-target check; a bad value is refused at startup and at run time; symlink test cases added (§12.5, §14, §16, ADR 0012).
 - T38 (no pre-releases in §20) was handled by the Project Lead directly.
+
+### Revision 2026-10-18 (9): T45, T46
+- **T45:** when a staff status change moves a ticket out of `new` and auto-assigns the person acting, `first_accepted_by/at` is recorded if not already set (§4 accept row).
+- **T46:** customer reply, cancel or reopen in a disallowed state returns `409 TICKET_READ_ONLY`, the same code as staff; DESIGN owns the customer wording (§4 rows, §6.3 customer endpoints).
