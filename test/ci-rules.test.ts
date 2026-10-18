@@ -1038,10 +1038,24 @@ describe("workflows", () => {
     }
   });
 
-  it("leaves the Semgrep step for M0-T04c", () => {
+  it("runs Semgrep CE in fast on p/secrets and p/javascript at ERROR", () => {
     const text = workflowText("ci.yml");
-    assert.match(text, /TODO\(M0-T04c\)/);
-    assert.doesNotMatch(text, /semgrep scan/);
+    assert.doesNotMatch(text, /TODO\(M0-T04c\)/);
+    assert.match(text, /semgrep==1\.181\.0/);
+    assert.match(text, /--config p\/secrets/);
+    assert.match(text, /--config p\/javascript/);
+    assert.match(text, /--severity ERROR/);
+    assert.match(text, /--error\b/);
+    assert.match(text, /--metrics=off/);
+    assert.doesNotMatch(text, /SEMGREP_APP_TOKEN|semgrep login|semgrep ci\b/);
+    const fastSteps = workflow("ci.yml").jobs.fast.steps as { run?: string }[];
+    const scan = fastSteps.find((step) => step.run?.includes("semgrep=="));
+    assert.match(scan?.run ?? "", /\nsemgrep scan --config p\/secrets/);
+    const fullSteps = workflow("ci.yml").jobs.full.steps as { run?: string }[];
+    assert.equal(
+      fullSteps.some((step) => (step.run ?? "").includes("semgrep")),
+      false,
+    );
   });
 
   it("keeps gitleaks in pr-meta and fails the command when there is a finding", () => {
