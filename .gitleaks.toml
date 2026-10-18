@@ -1,0 +1,8 @@
+# Secret scan for Help Desk (B1, ARCHITECTURE §14).
+# Built-in gitleaks rules. Do not ignore a directory to silence a finding.
+# Remove the secret instead.
+
+title = "help-desk"
+
+[extend]
+useDefault = true

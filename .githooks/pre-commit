@@ -1,0 +1,24 @@
+#!/bin/sh
+# Staged secret scan (B1). Refuses the commit when gitleaks finds a leak,
+# and when the gitleaks command is missing.
+set -eu
+
+if ! command -v gitleaks >/dev/null 2>&1; then
+  echo "pre-commit: gitleaks is not installed, so this commit is refused." >&2
+  echo "pre-commit: install gitleaks and try again. Do not use --no-verify." >&2
+  exit 1
+fi
+
+root=$(git rev-parse --show-toplevel)
+cd "$root"
+
+echo "pre-commit: scanning staged changes with gitleaks." >&2
+set +e
+gitleaks protect --staged --redact --no-banner --config "$root/.gitleaks.toml"
+status=$?
+set -e
+if [ "$status" -ne 0 ]; then
+  echo "pre-commit: refusing the commit. Remove the secret and stage the fix." >&2
+  exit "$status"
+fi
+exit 0

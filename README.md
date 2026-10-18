@@ -27,6 +27,8 @@ npm run verify
 
 `npm run verify` checks style, types, and tests. It does not start the server.
 
+`npm ci` installs the git hooks in `.githooks`. The pre-commit hook scans staged files with gitleaks. The pre-push hook refuses a push to `main`. Rules for agents are in `AGENTS.md`.
+
 ## Settings
 
 `deploy/env.example` lists every setting, with placeholder values only. Do not commit a `.env` file. Real passwords stay on the server.
