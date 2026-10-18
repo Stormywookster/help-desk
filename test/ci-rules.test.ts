@@ -336,14 +336,8 @@ describe("workflows", () => {
       assert.equal(keys.includes("paths-ignore"), false, name);
       assert.equal(keys.includes("pull_request_target"), false, name);
       assert.doesNotMatch(workflowText(name), /secrets\./);
+      assert.doesNotMatch(workflowText(name), /paths:|paths-ignore/);
     }
-    const searched = spawnSync(
-      "rg",
-      ["-n", "paths:|paths-ignore", ".github/workflows"],
-      { cwd: root, encoding: "utf8" },
-    );
-    assert.equal(searched.status, 1);
-    assert.equal(searched.stdout, "");
   });
 
   it("leaves the Semgrep step for M0-T04c", () => {
