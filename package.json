@@ -13,18 +13,24 @@
   "scripts": {
     "lint": "eslint . && prettier --check .",
     "typecheck": "tsc -p tsconfig.json --noEmit && npm run typecheck --workspaces --if-present",
-    "test": "node --test",
+    "test": "vitest run --project unit",
+    "test:unit": "vitest run --project unit",
+    "test:integration": "vitest run --project integration",
+    "test:e2e": "playwright test",
+    "ac:report": "node scripts/ac-report.mjs",
     "build": "npm run build --workspaces --if-present",
-    "verify": "npm run lint && npm run typecheck && npm run test && npm run build",
+    "verify": "bash scripts/verify.sh",
     "hooks:install": "git config core.hooksPath .githooks",
     "prepare": "npm run hooks:install"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
+    "@playwright/test": "^1.64.1",
     "@types/node": "^24.19.2",
     "eslint": "^10.13.0",
     "prettier": "^3.9.10",
     "typescript": "^6.0.3",
-    "typescript-eslint": "^8.71.2"
+    "typescript-eslint": "^8.71.2",
+    "vitest": "^5.0.5"
   }
 }
