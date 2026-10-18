@@ -659,9 +659,9 @@ The DoD for **every** task also includes: `npm run verify` green locally; CI `pr
 - **Reviewers:** Architect, QA, Support Ops
 
 #### M7-T03: Publishing, release pipeline, stack smoke
-- **Scope:** `release.yml` (ADR 0018): trigger `v[0-9]+.[0-9]+.[0-9]+` only; first job `gate` re-checks the tag against `^v[0-9]+\.[0-9]+\.[0-9]+$` and refuses the release if the commit isn't on `main`, `full` didn't pass on that exact SHA, the version isn't higher than the last release, or a `main-red`/`main-guard` issue is open. Then the Windows job (M6-T02) and both images; `X.Y.Z` is pushed, and `stable` is moved **last**, only after the Windows smoke test and both images succeed. Release notes are generated from the Conventional Commit titles merged since the last tag (T30). GHCR publishing of `edge` + `sha-*` from `main` only when `full` passes; `cleanup-images.yml` retention, stack smoke with a short E2E subset against the built images. Release procedure (§5.8): if `full` didn't run on the tagged commit, which is always the case when the tip of `main` is a docs-only commit, the releasing bot runs `ci.yml` manually (`workflow_dispatch`, which always runs `full`) before tagging, and `gate` refuses otherwise. Threat row TM-35 (release path) is the security reference for this task.
+- **Scope:** `release.yml` (ADR 0018): trigger `v[0-9]+.[0-9]+.[0-9]+` only; first job `gate` re-checks the tag against `^v[0-9]+\.[0-9]+\.[0-9]+$` and refuses the release if the commit isn't on `main`, `full` didn't pass on that exact SHA, the version isn't higher than the last release, or a `main-red`/`main-guard` issue is open. Then the Windows job (M6-T02) and both images; `X.Y.Z` is pushed, and `stable` is moved **last**, only after the Windows smoke test and both images succeed. Release notes are generated from the Conventional Commit titles merged since the last tag (T30). GHCR publishing of `edge` + `sha-*` from `main` only when `full` passes; `cleanup-images.yml` retention, stack smoke with a short E2E subset against the built images. Release procedure (§5.8): if `full` didn't run on the tagged commit, which is always the case when the tip of `main` is a docs-only commit, the releasing bot runs `ci.yml` manually (`workflow_dispatch`, which always runs `full`) before tagging, and `gate` refuses otherwise. Threat row TM-35 (release path) is the security reference for this task. The release `gate` must find that check run under the exact name GitHub reports for `.github/workflows/main-guard.yml`'s `provenance` job: `provenance`.
 - **Depends on:** M7-T02
-- **ACs:** AC-OPS-48 AC-OPS-49 AC-OPS-50 AC-OPS-74
+- **ACs:** AC-OPS-48 AC-OPS-49 AC-OPS-50 AC-OPS-74 AC-OPS-75
 - **Also exercises:** AC-OPS-01 AC-OPS-35
 - **DoD:** A tag produces images, installer asset and notes; smoke subset green against images; gate tests: `v1.2.3` accepted, `v1.2.3-rc.1`, `v1.2`, `1.2.3`, `v1.2.3+b` refused, and a release is refused while a `main-red` issue is open, or when `full` failed or was skipped (docs-only tip) on that SHA.
 - **Verification:** Release run link.
@@ -1397,6 +1397,7 @@ Only the steps the docs say a person must do, at the latest moment they're neede
 | AC-OPS-72 | M7-T08 | — |  |
 | AC-OPS-73 | M7-T08 | — |  |
 | AC-OPS-74 | M7-T03 | — |  |
+| AC-OPS-75 | M7-T03 | — |  |
 | AC-PRI-01 | M1-T02 | M5-T04 |  |
 | AC-PRI-02 | M1-T10 | — |  |
 | AC-PRI-03 | M2-T03 | — |  |
