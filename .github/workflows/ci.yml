@@ -1,0 +1,144 @@
+name: ci
+
+"on":
+  pull_request:
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - edited
+      - ready_for_review
+      - labeled
+      - unlabeled
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  pr-meta:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      docs_only: ${{ steps.meta.outputs.docs_only }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+      - run: bash scripts/ci/install-gitleaks.sh
+      - id: meta
+        run: node scripts/ci/pr-meta.mjs
+
+  fast:
+    needs: pr-meta
+    if: needs.pr-meta.result == 'success' && needs.pr-meta.outputs.docs_only != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: write
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: helpdesk
+          POSTGRES_PASSWORD: change-me
+          POSTGRES_DB: helpdesk_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U helpdesk -d helpdesk_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DATABASE_URL: postgres://helpdesk:change-me@localhost:5432/helpdesk_test
+      SCANNER: fake
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: bash scripts/ci/install-gitleaks.sh
+      - run: npm ci
+      - run: npm run verify
+      # TODO(M0-T04c): Semgrep step (p/secrets and p/javascript, errors only).
+      - run: echo "fast finished" > ci-step.txt
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: fast-log
+          path: ci-step.txt
+          retention-days: 3
+
+  full:
+    needs: pr-meta
+    if: >-
+      needs.pr-meta.result == 'success' &&
+      (github.event_name == 'workflow_dispatch' ||
+      (needs.pr-meta.outputs.docs_only != 'true' &&
+      (github.event_name == 'push' ||
+      github.event.repository.private == false ||
+      contains(github.event.pull_request.labels.*.name, 'full-ci'))))
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      actions: write
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: helpdesk
+          POSTGRES_PASSWORD: change-me
+          POSTGRES_DB: helpdesk_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U helpdesk -d helpdesk_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      mailpit:
+        image: axllent/mailpit:v1.31.6
+        ports:
+          - 8025:8025
+          - 1025:1025
+      clamav:
+        image: clamav/clamav:stable
+        ports:
+          - 3310:3310
+    env:
+      DATABASE_URL: postgres://helpdesk:change-me@localhost:5432/helpdesk_test
+      SCANNER: fake
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - run: bash scripts/ci/full-job.sh
+      - run: echo "full finished" > ci-step.txt
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: full-log
+          path: ci-step.txt
+          retention-days: 3
