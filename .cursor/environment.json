@@ -1,0 +1,5 @@
+{
+  "name": "help-desk",
+  "install": "bash scripts/dev-setup.sh && . \"$HOME/.helpdesk-node.sh\" && npm ci",
+  "start": "bash scripts/dev-setup.sh"
+}

@@ -18,14 +18,22 @@ Those folders are ready. The product itself is not built yet.
 
 [Node.js](https://nodejs.org/) 24. The file `.nvmrc` records that.
 
-## Check that the project is wired up
+## Set up a development machine
 
 ```sh
+bash scripts/dev-setup.sh
+. ~/.helpdesk-node.sh
 npm ci
 npm run verify
 ```
 
-`npm run verify` checks style, types, and tests. It does not start the server.
+`scripts/dev-setup.sh` installs and starts PostgreSQL 17 and Mailpit, and creates the `helpdesk` and `helpdesk_test` databases. It is safe to run again. `. ~/.helpdesk-node.sh` puts Node 24 on `PATH` (the script writes that file).
+
+`npm run verify` checks style, types, unit tests, integration tests, the OpenAPI contract, the build, and branding. Until integration tests and `openapi/openapi.json` exist, those two steps pass and say they did nothing.
+
+`npm run ac:report` prints which acceptance criteria have a tagged test. `node scripts/check-branding.mjs` fails if code, templates, or UI strings hard-code the site or company name.
+
+Machines with Docker can start PostgreSQL, Mailpit, and ClamAV with `docker compose -f deploy/compose.dev.yaml up`. Cloud agents use the shell script.
 
 `npm ci` installs the git hooks in `.githooks`. The pre-commit hook scans staged files with gitleaks. The pre-push hook refuses a push to `main`. Rules for agents are in `AGENTS.md`.
 
