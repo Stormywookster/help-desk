@@ -1,0 +1,18 @@
+# Docs-only patterns. The only reader is scripts/ci/docs-only.mjs.
+# A change is docs-only when every file matches an include and no exclude.
+# An empty change is not docs-only (the script, not this file, decides that).
+
++ docs/**
++ README.md
++ AGENTS.md
++ CHANGELOG.md
++ LICENSE
+
+- docs/ACCEPTANCE_CRITERIA.md
+- docs/runbooks/**
+- .github/**
+- scripts/**
+- deploy/**
+- openapi/**
+- apps/**
+- packages/**

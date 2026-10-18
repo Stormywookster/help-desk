@@ -1,0 +1,43 @@
+name: scheduled
+
+"on":
+  schedule:
+    # 06:00 UTC. Private repos run the Sunday entry only (weekly). Public repos
+    # run every day (nightly). GitHub cron is UTC; 06:00 UTC is 02:00 EDT.
+    - cron: "0 6 * * 0"
+    - cron: "0 6 * * 1-6"
+
+concurrency:
+  group: scheduled-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  weekly:
+    if: github.event.repository.private != true || github.event.schedule == '0 6 * * 0'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - run: bash scripts/ci/install-gitleaks.sh
+      - name: gitleaks full history
+        run: gitleaks detect --source . --config .gitleaks.toml --redact --no-banner --exit-code 1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - run: npm audit --audit-level=high
+      - name: full end-to-end placeholder
+        run: echo "scheduled full end-to-end tests are not in the repo yet"
+      - name: ZAP baseline placeholder
+        run: echo "scheduled ZAP baseline waits until the CI stack exists"
+      - name: Trivy placeholder
+        run: echo "scheduled Trivy waits until images are published"
