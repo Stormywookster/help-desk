@@ -1104,10 +1104,10 @@ Only the steps the docs say a person must do, at the latest moment they're neede
 | AC-CLOSE-11 | M2-T07 | — |  |
 | AC-CLOSE-12 | M1-T03 | — |  |
 | AC-CLOSE-13 | M2-T07 | M4-T05 |  |
-| AC-CLOSE-14 | M1-T01 | — |  |
-| AC-CLOSE-15 | M1-T01 | — |  |
+| AC-CLOSE-14 | M1-T01 | M2-T07, M5-T03 |  |
+| AC-CLOSE-15 | M1-T01 | M2-T07, M5-T03 |  |
 | AC-CLOSE-16 | M3-T02 | M5-T05, M8-T02 |  |
-| AC-CLOSE-17 | M1-T01 | — |  |
+| AC-CLOSE-17 | M1-T01 | M2-T07, M5-T03 |  |
 | AC-CLOSE-18 | M2-T07 | — |  |
 | AC-CLOSE-19 | M5-T03 | — |  |
 | AC-CLOSE-20 | M5-T03 | — |  |

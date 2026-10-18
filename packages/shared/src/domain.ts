@@ -515,7 +515,7 @@ function customerReply(
 ): TransitionResult {
   const actor = customer(command.actor);
   if (isDenial(actor)) return actor;
-  if (!CUSTOMER_REPLY_STATUSES.includes(ticket.status)) return unnamed();
+  if (!CUSTOMER_REPLY_STATUSES.includes(ticket.status)) return readOnly();
   const attention = { effect: "set", reason: "customer_reply" } as const;
   const next: Ticket = {
     ...ticket,
@@ -531,7 +531,7 @@ function customerCancel(
 ): TransitionResult {
   const actor = customer(command.actor);
   if (isDenial(actor)) return actor;
-  if (!CUSTOMER_CANCEL_STATUSES.includes(ticket.status)) return unnamed();
+  if (!CUSTOMER_CANCEL_STATUSES.includes(ticket.status)) return readOnly();
   const attention = {
     effect: "clear",
     reason: "customer_cancelled",
@@ -549,7 +549,7 @@ function customerReopen(
   const actor = customer(command.actor);
   if (isDenial(actor)) return actor;
   if (ticket.status !== "resolved" || !isBeforeDue(ticket, context.now))
-    return unnamed();
+    return readOnly();
   const attention = { effect: "set", reason: "customer_reopen" } as const;
   const next: Ticket = {
     ...ticket,
@@ -671,7 +671,13 @@ function applyStaffStatusChange(
     return unnamed();
   let next: Ticket = { ...ticket, status: to };
   if (ticket.status === "new" && ticket.assigneeId === null) {
-    next = { ...next, assigneeId: actorId, assignedAt: context.now };
+    next = {
+      ...next,
+      assigneeId: actorId,
+      assignedAt: context.now,
+      firstAcceptedBy: actorId,
+      firstAcceptedAt: context.now,
+    };
   }
   if (to === "resolved") {
     next = {

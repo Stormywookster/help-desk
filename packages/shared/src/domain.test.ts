@@ -458,13 +458,15 @@ describe("staff status changes", () => {
       assert.equal(next.status, row.to);
       assertClear(allowed.attention, "staff_status_change", "staff");
       assert.equal(next.needsAttention, false);
-      assert.equal(next.firstAcceptedBy, null);
       if (row.from === "new") {
         assert.equal(next.assigneeId, row.actor.id);
         assert.equal(next.assignedAt, NOW);
+        assert.equal(next.firstAcceptedBy, row.actor.id);
+        assert.equal(next.firstAcceptedAt, NOW);
       } else {
         assert.equal(next.assigneeId, null);
         assert.equal(next.assignedAt, null);
+        assert.equal(next.firstAcceptedBy, null);
       }
       if (row.to === "resolved") {
         assert.equal(next.resolvedAt, NOW);
@@ -527,6 +529,21 @@ describe("staff status changes", () => {
       );
     });
   }
+
+  it("a status change out of New records the first acceptance", () => {
+    const next = asTicket(
+      transition(
+        sample("new"),
+        { action: "set_status", actor: agent, to: "in_progress" },
+        ctx(NOW),
+      ),
+    );
+    assert.equal(next.status, "in_progress");
+    assert.equal(next.assigneeId, agent.id);
+    assert.equal(next.assignedAt, NOW);
+    assert.equal(next.firstAcceptedBy, agent.id);
+    assert.equal(next.firstAcceptedAt, NOW);
+  });
 
   it("Agent set_status on a Closed ticket and on a Cancelled ticket returns 409 TICKET_READ_ONLY", () => {
     for (const from of ["closed", "cancelled"] as const) {
@@ -949,8 +966,8 @@ describe("documented transitions outside the delivered outlines", () => {
       ),
       {
         ok: false,
-        httpStatus: null,
-        code: null,
+        httpStatus: 409,
+        code: "TICKET_READ_ONLY",
       },
     );
   });
@@ -1009,8 +1026,8 @@ describe("documented transitions outside the delivered outlines", () => {
       ),
       {
         ok: false,
-        httpStatus: null,
-        code: null,
+        httpStatus: 409,
+        code: "TICKET_READ_ONLY",
       },
     );
   });
@@ -1043,8 +1060,8 @@ describe("documented transitions outside the delivered outlines", () => {
       ),
       {
         ok: false,
-        httpStatus: null,
-        code: null,
+        httpStatus: 409,
+        code: "TICKET_READ_ONLY",
       },
     );
     assert.deepEqual(
@@ -1055,8 +1072,8 @@ describe("documented transitions outside the delivered outlines", () => {
       ),
       {
         ok: false,
-        httpStatus: null,
-        code: null,
+        httpStatus: 409,
+        code: "TICKET_READ_ONLY",
       },
     );
     assert.deepEqual(
@@ -1067,8 +1084,8 @@ describe("documented transitions outside the delivered outlines", () => {
       ),
       {
         ok: false,
-        httpStatus: null,
-        code: null,
+        httpStatus: 409,
+        code: "TICKET_READ_ONLY",
       },
     );
   });
@@ -1087,8 +1104,8 @@ describe("documented transitions outside the delivered outlines", () => {
       ),
       {
         ok: false,
-        httpStatus: null,
-        code: null,
+        httpStatus: 409,
+        code: "TICKET_READ_ONLY",
       },
     );
     assert.deepEqual(
