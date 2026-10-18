@@ -1,0 +1,49 @@
+{
+  "note": "M0-T02 label list. This agent could not create GitHub labels (the GitHub CLI is read-only here). Descriptions are only what IMPLEMENTATION_PLAN.md or ADR 0019 states. A description that says the plan does not define application is intentional.",
+  "labels": [
+    {
+      "name": "full-ci",
+      "description": "Runs the full CI job. Required for attachments, ClamAV, E2E, Electron, Docker, and backups."
+    },
+    {
+      "name": "security-review",
+      "description": "Named in M0-T02. The plan does not say when to apply it."
+    },
+    {
+      "name": "needs-qa",
+      "description": "Named in M0-T02. The plan does not say when to apply it."
+    },
+    {
+      "name": "needs-design",
+      "description": "Named in M0-T02. The plan does not say when to apply it."
+    },
+    {
+      "name": "needs-support-ops",
+      "description": "Named in M0-T02. The plan does not say when to apply it."
+    },
+    {
+      "name": "blocked",
+      "description": "Project Lead hold. A held pull request does not merge (plan §5.5)."
+    },
+    {
+      "name": "human-step",
+      "description": "Named in M0-T02. The plan does not say when to apply it."
+    },
+    {
+      "name": "beta-bug",
+      "description": "Beta bug filed by the Project Lead from Brandon's report (T32)."
+    },
+    {
+      "name": "main-guard",
+      "description": "A push to main broke the provenance rules (ADR 0019)."
+    },
+    {
+      "name": "main-red",
+      "description": "ci.yml failed on main (ADR 0019)."
+    },
+    {
+      "name": "fix-main",
+      "description": "May merge during a main freeze. The pull request body must say Fixes #N."
+    }
+  ]
+}

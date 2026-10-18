@@ -1,0 +1,32 @@
+# Advisory only (IMPLEMENTATION_PLAN §5.3 and §5.6).
+# GitHub cannot request a review from this repository's author, so this file
+# documents which role must leave `REVIEW <role>: APPROVED`. It is not enforced.
+# Format: <path><TAB><role>
+# Roles: Architect, QA, Designer, Support Ops, Project Lead.
+# QA reviews every pull request that delivers acceptance criteria. That duty is
+# not a path rule. Paths below are the §17 layout areas named by §5.3.
+# The plan does not list these exact paths. See the M0-T02 open questions.
+
+apps/api/	Architect
+apps/portal/	Designer
+apps/console/	Designer
+apps/desktop/	Designer, Architect
+packages/ui/	Designer
+packages/shared/	Architect
+packages/api-client/	Architect
+openapi/	Architect
+deploy/	Architect
+.github/	Architect
+.githooks/	Architect
+.gitleaks.toml	Architect
+docs/adr/	Architect
+docs/ARCHITECTURE.md	Architect
+docs/DESIGN.md	Designer
+docs/EMAIL_AND_WORDING.md	Support Ops
+docs/runbooks/	Support Ops
+docs/ACCEPTANCE_CRITERIA.md	QA
+docs/IMPLEMENTATION_PLAN.md	Project Lead
+docs/PROJECT_STATE.md	Project Lead
+docs/HUMAN_STEPS_LOG.md	Project Lead
+AGENTS.md	Project Lead
+CODEOWNERS	Project Lead
