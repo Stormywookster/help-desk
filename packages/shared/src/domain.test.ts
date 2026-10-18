@@ -545,6 +545,26 @@ describe("staff status changes", () => {
     assert.equal(next.firstAcceptedAt, NOW);
   });
 
+  it("a status change out of New keeps an earlier first acceptance", () => {
+    const earlier: Ticket = {
+      ...sample("new"),
+      firstAcceptedBy: "agent-9",
+      firstAcceptedAt: EARLIER,
+    };
+    const next = asTicket(
+      transition(
+        earlier,
+        { action: "set_status", actor: agent, to: "in_progress" },
+        ctx(NOW),
+      ),
+    );
+    assert.equal(next.status, "in_progress");
+    assert.equal(next.assigneeId, agent.id);
+    assert.equal(next.assignedAt, NOW);
+    assert.equal(next.firstAcceptedBy, "agent-9");
+    assert.equal(next.firstAcceptedAt, EARLIER);
+  });
+
   it("Agent set_status on a Closed ticket and on a Cancelled ticket returns 409 TICKET_READ_ONLY", () => {
     for (const from of ["closed", "cancelled"] as const) {
       assert.deepEqual(
@@ -909,6 +929,8 @@ describe("documented transitions outside the delivered outlines", () => {
     );
     assert.equal(next.assigneeId, "agent-9");
     assert.equal(next.assignedAt, EARLIER);
+    assert.equal(next.firstAcceptedBy, "agent-9");
+    assert.equal(next.firstAcceptedAt, EARLIER);
     assert.equal(next.status, "open");
   });
 
@@ -957,19 +979,23 @@ describe("documented transitions outside the delivered outlines", () => {
     assertClear(allowed.attention, "customer_cancelled", "system");
   });
 
-  it("a customer cannot cancel a Resolved ticket", () => {
-    assert.deepEqual(
-      transition(
-        sample("resolved"),
-        { action: "customer_cancel", actor: customer },
-        ctx(NOW),
-      ),
-      {
-        ok: false,
-        httpStatus: 409,
-        code: "TICKET_READ_ONLY",
-      },
-    );
+  it("[AC-LC-79] a customer cannot cancel a Resolved, Closed, or Cancelled ticket", () => {
+    for (const status of ["resolved", "closed", "cancelled"] as const) {
+      const ticket = sample(status);
+      assert.deepEqual(
+        transition(
+          ticket,
+          { action: "customer_cancel", actor: customer },
+          ctx(NOW),
+        ),
+        {
+          ok: false,
+          httpStatus: 409,
+          code: "TICKET_READ_ONLY",
+        },
+      );
+      assert.equal(ticket.status, status);
+    }
   });
 
   it("a customer reply on Open sets the flag and leaves the status", () => {
@@ -1017,19 +1043,21 @@ describe("documented transitions outside the delivered outlines", () => {
     });
   });
 
-  it("a customer cannot reply on a Closed ticket", () => {
-    assert.deepEqual(
-      transition(
-        make("closed", false, null),
-        { action: "customer_reply", actor: customer },
-        ctx(NOW),
-      ),
-      {
-        ok: false,
-        httpStatus: 409,
-        code: "TICKET_READ_ONLY",
-      },
-    );
+  it("a customer cannot reply on a Closed ticket or a Cancelled ticket", () => {
+    for (const status of ["closed", "cancelled"] as const) {
+      assert.deepEqual(
+        transition(
+          make(status, false, null),
+          { action: "customer_reply", actor: customer },
+          ctx(NOW),
+        ),
+        {
+          ok: false,
+          httpStatus: 409,
+          code: "TICKET_READ_ONLY",
+        },
+      );
+    }
   });
 
   it("a customer reopen before the due time opens the ticket, clears the clock, and keeps the assignee", () => {
@@ -1051,43 +1079,42 @@ describe("documented transitions outside the delivered outlines", () => {
     });
   });
 
-  it("a customer cannot reopen at or after the due time, or from a status that is not Resolved", () => {
-    assert.deepEqual(
-      transition(
-        sample("resolved"),
-        { action: "customer_reopen", actor: customer },
-        ctx(AT_DUE),
-      ),
-      {
-        ok: false,
-        httpStatus: 409,
-        code: "TICKET_READ_ONLY",
-      },
-    );
-    assert.deepEqual(
-      transition(
-        sample("resolved"),
-        { action: "customer_reopen", actor: customer },
-        ctx(AFTER_DUE),
-      ),
-      {
-        ok: false,
-        httpStatus: 409,
-        code: "TICKET_READ_ONLY",
-      },
-    );
-    assert.deepEqual(
-      transition(
-        sample("open"),
-        { action: "customer_reopen", actor: customer },
-        ctx(BEFORE_DUE),
-      ),
-      {
-        ok: false,
-        httpStatus: 409,
-        code: "TICKET_READ_ONLY",
-      },
-    );
+  it("a customer cannot reopen at or after the due time", () => {
+    for (const now of [AT_DUE, AFTER_DUE]) {
+      const ticket = sample("resolved");
+      assert.deepEqual(
+        transition(
+          ticket,
+          { action: "customer_reopen", actor: customer },
+          ctx(now),
+        ),
+        {
+          ok: false,
+          httpStatus: 409,
+          code: "TICKET_READ_ONLY",
+        },
+      );
+      assert.equal(ticket.status, "resolved");
+    }
+  });
+
+  it("a customer cannot reopen a ticket that is not Resolved", () => {
+    for (const status of ["open", "cancelled"] as const) {
+      const ticket = sample(status);
+      assert.deepEqual(
+        transition(
+          ticket,
+          { action: "customer_reopen", actor: customer },
+          ctx(BEFORE_DUE),
+        ),
+        {
+          ok: false,
+          httpStatus: 409,
+          code: "TICKET_READ_ONLY",
+        },
+      );
+      assert.equal(ticket.status, status);
+    }
   });
 
   it("a Resolved ticket with no due time cannot be reopened or auto-closed", () => {

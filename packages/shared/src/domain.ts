@@ -548,8 +548,8 @@ function customerReopen(
 ): TransitionResult {
   const actor = customer(command.actor);
   if (isDenial(actor)) return actor;
-  if (ticket.status !== "resolved" || !isBeforeDue(ticket, context.now))
-    return readOnly();
+  if (ticket.status !== "resolved") return readOnly();
+  if (!isBeforeDue(ticket, context.now)) return readOnly();
   const attention = { effect: "set", reason: "customer_reopen" } as const;
   const next: Ticket = {
     ...ticket,
@@ -675,9 +675,14 @@ function applyStaffStatusChange(
       ...next,
       assigneeId: actorId,
       assignedAt: context.now,
-      firstAcceptedBy: actorId,
-      firstAcceptedAt: context.now,
     };
+    if (next.firstAcceptedAt === null) {
+      next = {
+        ...next,
+        firstAcceptedBy: actorId,
+        firstAcceptedAt: context.now,
+      };
+    }
   }
   if (to === "resolved") {
     next = {
