@@ -10,20 +10,21 @@ name: main-guard
 
 concurrency:
   group: main-guard-${{ github.event_name }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
-permissions:
-  contents: read
-  pull-requests: read
-  checks: read
-  actions: read
-  issues: write
+permissions: {}
 
 jobs:
   provenance:
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: read
+      checks: read
+      actions: read
+      issues: write
     env:
       GITHUB_TOKEN: ${{ github.token }}
     steps:
@@ -37,9 +38,18 @@ jobs:
       - run: node scripts/ci/main-guard.mjs
 
   status:
-    if: github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'failure'
+    if: >-
+      github.event_name == 'workflow_run' &&
+      github.event.workflow_run.conclusion == 'failure' &&
+      github.event.workflow_run.event == 'push'
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: read
+      checks: read
+      actions: read
+      issues: write
     env:
       GITHUB_TOKEN: ${{ github.token }}
     steps:

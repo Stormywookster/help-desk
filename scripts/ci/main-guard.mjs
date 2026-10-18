@@ -12,7 +12,43 @@ import {
 
 const ZERO = /^0+$/;
 const SHA = /^[0-9a-f]{7,64}$/i;
-const GUARD_PATH = ".github/workflows/main-guard.yml";
+const FULL_SHA = /^[0-9a-f]{40}$/i;
+export const BOOTSTRAP_PATH = ".github/main-guard-bootstrap.txt";
+
+export function isAncestorOfBootstrap(sha, bootstrap, root = repoRoot()) {
+  if (!SHA.test(sha) || !SHA.test(bootstrap)) {
+    throw new Error("main-guard: refusing a non-sha");
+  }
+  const result = git(root, ["merge-base", "--is-ancestor", sha, bootstrap]);
+  if (result.status === 0) return true;
+  if (result.status === 1) return false;
+  throw new Error(`main-guard: merge-base failed for ${sha}`);
+}
+
+export function bootstrapChanged(sha, root = repoRoot()) {
+  if (!SHA.test(sha)) throw new Error(`main-guard: refusing non-sha ${sha}`);
+  const diff = git(root, [
+    "diff-tree",
+    "--name-status",
+    "-r",
+    "--no-commit-id",
+    `${sha}^`,
+    sha,
+  ]);
+  if (diff.status !== 0) return false;
+  return diff.stdout.split("\n").some((line) => {
+    const parts = line.split("\t");
+    return parts.includes(BOOTSTRAP_PATH) && parts[0] !== "A";
+  });
+}
+
+export function readBootstrapSha(root, before, after) {
+  const text = (fileAt(root, before) ?? fileAt(root, after) ?? "").trim();
+  if (!FULL_SHA.test(text)) {
+    throw new Error("main-guard: bootstrap sha is missing");
+  }
+  return text;
+}
 
 export function createGithub(token, repository) {
   const [owner, repo] = repository.split("/");
@@ -67,7 +103,13 @@ export function createGithub(token, repository) {
       if (plan.action === "reopen") {
         await api(token, `/repos/${owner}/${repo}/issues/${plan.number}`, {
           method: "PATCH",
-          body: JSON.stringify({ state: "open" }),
+          body: JSON.stringify({ state: "open", body: plan.body }),
+        });
+      }
+      if (plan.action === "update") {
+        return api(token, `/repos/${owner}/${repo}/issues/${plan.number}`, {
+          method: "PATCH",
+          body: JSON.stringify({ body: plan.body }),
         });
       }
       if (plan.action === "comment" || plan.action === "reopen") {
@@ -85,23 +127,8 @@ export function createGithub(token, repository) {
   };
 }
 
-// A commit is checked only when a parent already contains this workflow.
-// Commits before it lands predate CI, including the commit that adds the file.
-export function commitFollowsGuard(sha, root = repoRoot()) {
-  if (!SHA.test(sha)) throw new Error(`main-guard: refusing non-sha ${sha}`);
-  const commit = git(root, ["rev-parse", "-q", "--verify", `${sha}^{commit}`]);
-  if (commit.status !== 0) {
-    throw new Error(`main-guard: commit ${sha} is not in this checkout`);
-  }
-  const parents = git(root, ["rev-parse", `${sha}^@`]);
-  if (parents.status !== 0 || !parents.stdout.trim()) return false;
-  for (const parent of parents.stdout.trim().split("\n")) {
-    const file = git(root, ["cat-file", "-e", `${parent}:${GUARD_PATH}`]);
-    if (file.status === 0) return true;
-  }
-  return false;
-}
-
+// Skip only commits that are ancestors of the bootstrap SHA, including that
+// commit. The merge that adds this workflow is newer, so it is checked.
 export async function handlePush(event, ctx) {
   const forced = event.forced === true;
   const deleted = event.deleted === true || ZERO.test(event.after ?? "");
@@ -114,12 +141,17 @@ export async function handlePush(event, ctx) {
     rewritten = compared.status === "diverged" || compared.status === "behind";
     shas = (compared.commits ?? []).map((commit) => commit.sha);
   }
-  const follows = ctx.followsGuard ?? commitFollowsGuard;
+  const predates =
+    ctx.predates ??
+    ((sha) =>
+      isAncestorOfBootstrap(sha, ctx.bootstrap, ctx.root ?? repoRoot()));
   const commits = [];
   if (!forced && !deleted && !rewritten) {
     for (const sha of shas) {
-      if (!follows(sha)) {
-        console.log(`main-guard: skipping ${sha}; it predates main-guard.yml`);
+      if (predates(sha)) {
+        console.log(
+          `main-guard: skipping ${sha}; it is an ancestor of the bootstrap commit`,
+        );
         continue;
       }
       commits.push(await ctx.loadCommit(sha));
@@ -151,12 +183,28 @@ export async function handleStatus(event, ctx) {
   const failed = jobs
     .filter((job) => job.conclusion === "failure")
     .map((job) => job.name);
-  const issue = planGuardIssue({
+  const planned = planGuardIssue({
     openIssues: await ctx.github.listIssues("main-red", "all"),
     label: "main-red",
     title: "main-red: ci.yml failed on main",
-    body: redBody({ jobs: failed, runUrl: run.html_url ?? "" }),
+    body: "",
   });
+  const runUrl = run.html_url ?? "";
+  if (planned.action === "open") {
+    const created = await ctx.github.apply({
+      ...planned,
+      body: "ci.yml failed on main.",
+    });
+    const number = created?.number;
+    if (!number) throw new Error("main-guard: opened issue has no number");
+    const body = redBody({ jobs: failed, runUrl, number });
+    await ctx.github.apply({ action: "update", number, body });
+    return { ...planned, number, body };
+  }
+  const issue = {
+    ...planned,
+    body: redBody({ jobs: failed, runUrl, number: planned.number }),
+  };
   await ctx.github.apply(issue);
   return issue;
 }
@@ -177,6 +225,7 @@ export async function loadCommit(sha, github, texts) {
       merged: Boolean(pull.merged_at),
       merge_commit_sha: pull.merge_commit_sha,
       title: pull.title ?? "",
+      body: pull.body ?? "",
     })),
     checks,
     files,
@@ -184,26 +233,32 @@ export async function loadCommit(sha, github, texts) {
     listText: texts.listText,
     codeowners: texts.codeowners,
     plan: texts.plan,
+    bootstrapChanged: bootstrapChanged(sha),
   };
 }
 
-async function conclusions(github, sha) {
-  const runs = await github.checkRuns(sha);
+export function pickConclusions(runs) {
   const latest = new Map();
-  for (const run of runs) {
+  for (const run of runs ?? []) {
+    if (run.conclusion === "cancelled") continue;
     const name = jobName(run.name);
     if (name !== "pr-meta" && name !== "fast") continue;
     const prev = latest.get(name);
     if (
       !prev ||
       String(run.completed_at ?? "") > String(prev.completed_at ?? "")
-    )
+    ) {
       latest.set(name, run);
+    }
   }
   return {
     "pr-meta": latest.get("pr-meta")?.conclusion,
     fast: latest.get("fast")?.conclusion,
   };
+}
+
+async function conclusions(github, sha) {
+  return pickConclusions(await github.checkRuns(sha));
 }
 
 function jobName(name) {
@@ -231,6 +286,13 @@ function presentIssue(issue) {
 
 function git(root, args) {
   return spawnSync("git", args, { cwd: root, encoding: "utf8" });
+}
+
+function fileAt(root, rev) {
+  if (!rev || ZERO.test(rev) || !SHA.test(rev)) return null;
+  const result = git(root, ["show", `${rev}:${BOOTSTRAP_PATH}`]);
+  if (result.status !== 0) return null;
+  return result.stdout.trim();
 }
 
 async function paginate(token, path) {
@@ -284,8 +346,8 @@ async function main() {
   if (name === "push") {
     const result = await handlePush(event, {
       github,
+      bootstrap: readBootstrapSha(repoRoot(), event.before, event.after),
       loadCommit: (sha) => loadCommit(sha, github, texts),
-      followsGuard: (sha) => commitFollowsGuard(sha),
     });
     if (!result.ok) process.exit(1);
     return;

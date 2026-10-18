@@ -37,6 +37,12 @@ export function evaluateCommit(commit) {
   const merged = (commit.pulls ?? []).filter(
     (pull) => pull.merged === true && pull.merge_commit_sha === sha,
   );
+  if (commit.bootstrapChanged === true) {
+    problems.push({
+      commit: sha,
+      problem: "changed .github/main-guard-bootstrap.txt",
+    });
+  }
   if (merged.length === 0) {
     problems.push({
       commit: sha,
@@ -72,6 +78,7 @@ export function evaluateCommit(commit) {
   const roles = requiredRoles({
     files: commit.files ?? [],
     title: pull.title ?? "",
+    body: pull.body ?? "",
     codeowners: commit.codeowners ?? "",
     plan: commit.plan ?? "",
   });
@@ -87,7 +94,7 @@ export function evaluateCommit(commit) {
   return problems;
 }
 
-export function requiredRoles({ files, title, codeowners, plan }) {
+export function requiredRoles({ files, title, body, codeowners, plan }) {
   const roles = new Set();
   for (const file of files) {
     const match = codeownerFor(codeowners, file);
@@ -101,7 +108,7 @@ export function requiredRoles({ files, title, codeowners, plan }) {
   if (task && (task.startsWith("M0-") || task === "M8-T03")) {
     roles.add("Project Lead");
   }
-  if (task && planHasAc(plan, task)) roles.add("QA");
+  if (bodyDeliversAc(body) || planHasAc(plan, task)) roles.add("QA");
   return [...roles];
 }
 
@@ -123,13 +130,13 @@ export function guardBody(problems) {
   return lines.join("\n");
 }
 
-export function redBody({ jobs, runUrl }) {
+export function redBody({ jobs, runUrl, number }) {
   const failed = jobs.length > 0 ? jobs.join(", ") : "unknown";
   return [
     "ci.yml failed on main.",
     `Failed jobs: ${failed}`,
     `Run: ${runUrl}`,
-    "Fix: open a fix-main pull request whose body says Fixes #N.",
+    `Fix: open a fix-main pull request whose body says Fixes #${number}.`,
   ].join("\n");
 }
 
@@ -150,11 +157,20 @@ export function taskId(title) {
   return TASK_ID.exec(title ?? "")?.[1] ?? "";
 }
 
+function bodyDeliversAc(body) {
+  const delivered = /Delivered:\s*([^\n]*)/.exec(body ?? "");
+  return Boolean(delivered && /AC-[A-Z]+-\d+/.test(delivered[1]));
+}
+
 function planHasAc(plan, task) {
-  if (!plan) return false;
+  if (!plan || !task) return false;
   const owners = taskOwners(plan);
-  for (const owner of owners.values()) {
-    if (owner.primary === task || owner.also.includes(task)) return true;
+  const base = task.replace(/[a-z]$/, "");
+  const ids = base === task ? [task] : [task, base];
+  for (const id of ids) {
+    for (const owner of owners.values()) {
+      if (owner.primary === id || owner.also.includes(id)) return true;
+    }
   }
   return false;
 }
