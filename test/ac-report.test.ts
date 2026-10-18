@@ -23,7 +23,7 @@ describe("AC report", () => {
     assert.deepEqual(ids, ["AC-AUD-01", "AC-GEN-11"]);
   });
 
-  it("compares the 510 criteria with tagged tests", () => {
+  it("compares the 511 criteria with tagged tests", () => {
     const defined = definedAcs(
       readFileSync(join(root, "docs/ACCEPTANCE_CRITERIA.md"), "utf8"),
     );
@@ -31,13 +31,13 @@ describe("AC report", () => {
       readFileSync(join(root, "docs/IMPLEMENTATION_PLAN.md"), "utf8"),
     );
     const tests = taggedTests(root);
-    assert.equal(defined.length, 510);
+    assert.equal(defined.length, 511);
     assert.equal(owners.get("AC-GEN-11")?.primary, "M0-T03");
     const report = coverageReport({ defined, owners, tests, task: "M0-T03" });
     assert.match(report, /AC-GEN-11\s+yes/);
     assert.match(report, /Uncovered in M0-T03: none/);
     const summary = coverageReport({ defined, owners, tests });
-    assert.match(summary, /defined\s+510/);
+    assert.match(summary, /defined\s+511/);
     assert.match(summary, /AC-GEN-11/);
   });
 });

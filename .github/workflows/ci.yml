@@ -75,7 +75,11 @@ jobs:
       - run: bash scripts/ci/install-gitleaks.sh
       - run: npm ci
       - run: npm run verify
-      # TODO(M0-T04c): Semgrep step (p/secrets and p/javascript, errors only).
+      - name: Semgrep CE
+        run: |
+          python3 -m pip install --user --disable-pip-version-check --break-system-packages 'semgrep==1.181.0'
+          export PATH="${HOME}/.local/bin:${PATH}"
+          semgrep scan --config p/secrets --config p/javascript --severity ERROR --error --metrics=off --disable-version-check
       - run: echo "fast finished" > ci-step.txt
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
