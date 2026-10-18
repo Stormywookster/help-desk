@@ -32,3 +32,8 @@
 ## Consequences
 - A bypass or a red `main` is visible within minutes as an issue, and releases stop until it's handled. Nothing is ever pushed by the guard itself.
 - If the repo becomes public (or moves to a paid plan), H-4 adds a real ruleset. The guard stays as a cheap second check.
+
+## Addendum (2026-10-18): bootstrap rule
+`provenance` skips commits that are ancestors of, or equal to, a fixed bootstrap commit: the tip of `main` just before PR #6 merges (currently `0cf10a91`; if `main` moves first, update it in the PR). That SHA is recorded once in `.github/main-guard-bootstrap.txt`, and the check is `git merge-base --is-ancestor <commit> <bootstrap>`. This covers the M0 commits from before CI (#1 to #4). PR #6's own merge commit is not skipped: it has `pr-meta`, `fast` and REVIEW comments, so it is checked normally and serves as the guard's first real test.
+The rule "skip when the parent has no `main-guard.yml`" is rejected. Under it, a commit that deletes or renames the guard would make every later commit skip, which is a permanent silent bypass (TM-35).
+The bootstrap file is never docs-only, and only a reviewed PR may change it. Any change to it after the first merge opens a `main-guard` issue. If `main-guard.yml` disappears from `main`, `provenance` can no longer run, so the release gate (ADR 0018) refuses to tag while the file is missing.

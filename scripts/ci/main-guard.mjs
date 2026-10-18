@@ -35,7 +35,9 @@ export function bootstrapChanged(sha, root = repoRoot()) {
     `${sha}^`,
     sha,
   ]);
-  if (diff.status !== 0) return false;
+  if (diff.status !== 0) {
+    throw new Error(`main-guard: diff-tree failed for ${sha}`);
+  }
   return diff.stdout.split("\n").some((line) => {
     const parts = line.split("\t");
     return parts.includes(BOOTSTRAP_PATH) && parts[0] !== "A";

@@ -136,6 +136,8 @@ Labels used on every item:
 - T37 (AC OQ-20): Alert subjects cut at 60 characters follow T19's rule: cut at the last word boundary at or before character 60, hard-cut a single longer word, and add "…", which isn't counted.
 - T38 (AC OQ-21): ADR 0018 wins, so there are no pre-releases of any kind. Remove "desktop-edge" from ARCH §20. Windows testing between releases uses the manual debug build (T20).
 - T39 (AC OQ-22): For SUPPORT_BUNDLE_DIR and --to, symlinks are resolved to the real path before the backup-target check. A bad value is refused both at startup and when the command runs, as the plan already says.
+- T40 (Engineer, M0-T04c): Semgrep fails `fast` only on a narrow ruleset (p/secrets + p/javascript, ERROR severity). p/default isn't run, which saves CI minutes. Adding rules later needs the Architect's approval.
+- T41 (Engineer, M0): The Engineer decides CODEOWNERS paths and when labels are applied, following the plan's reviewer roles, and creates the labels in scripts/labels.json as part of M0. The Engineer also picks how gitleaks is installed, as long as the version is pinned. The AC-GEN-11 branding check does not cover legal text: privacy and terms text is entered by an Admin later (B10), so it has no literal to check.
 - DEFERRED: alerts to a separate or +alerts address (EMAIL PROPOSED-36) and go-live domain/email authentication (PROPOSED-41/42) are revisited at go-live.
 - Naming: threat-model rows are renamed TM-n (no fixed upper bound) so they don't collide with team decisions T-n.
 - DEFERRED to go-live: the live sender address and display name, and the company/site names (Brandon hasn't picked them yet).

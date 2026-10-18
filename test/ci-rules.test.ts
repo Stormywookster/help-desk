@@ -584,6 +584,24 @@ describe("provenance", () => {
       ),
     );
   });
+
+  it("throws when diff-tree cannot read the commit", () => {
+    const dir = mkdtempSync(join(tmpdir(), "guard-diff-"));
+    try {
+      runGit(["init"], dir);
+      runGit(["config", "user.email", "test@example.com"], dir);
+      runGit(["config", "user.name", "test"], dir);
+      writeFileSync(join(dir, "README.md"), "base\n");
+      runGit(["add", "README.md"], dir);
+      runGit(["commit", "-m", "base"], dir);
+      assert.throws(
+        () => bootstrapChanged("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", dir),
+        /diff-tree failed/,
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("guard issues", () => {
