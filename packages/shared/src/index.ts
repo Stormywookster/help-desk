@@ -1,1 +1,30 @@
-export {};
+export {
+  ACTIVE_STATUSES,
+  AUTO_CLOSE_CRON,
+  DISPLAY_TIMEZONE,
+  LIMITS,
+  PRIORITIES,
+  STATUSES,
+  TERMINAL_STATUSES,
+  autoCloseDueAt,
+  formatAutoCloseEt,
+  isValidReopenWindow,
+  ticketScopeFor,
+  transition,
+} from "./domain.js";
+
+export type {
+  Actor,
+  AttentionEffect,
+  ClearReason,
+  Command,
+  Priority,
+  ProblemCode,
+  SetReason,
+  Status,
+  Ticket,
+  TransitionContext,
+  TransitionDenial,
+  TransitionOk,
+  TransitionResult,
+} from "./domain.js";
