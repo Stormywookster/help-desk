@@ -676,7 +676,7 @@ function applyStaffStatusChange(
       assigneeId: actorId,
       assignedAt: context.now,
     };
-    if (next.firstAcceptedAt === null) {
+    if (next.firstAcceptedBy === null && next.firstAcceptedAt === null) {
       next = {
         ...next,
         firstAcceptedBy: actorId,
