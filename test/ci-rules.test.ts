@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import {
+  mkdirSync,
   mkdtempSync,
   readdirSync,
   readFileSync,
@@ -14,7 +15,20 @@ import { describe, it } from "vitest";
 import { versionsToDelete } from "../scripts/ci/cleanup-images.mjs";
 import { LIST_PATH, classify, readList } from "../scripts/ci/docs-only.mjs";
 import { fastRuns, fullRuns, scheduledRuns } from "../scripts/ci/gates.mjs";
+import {
+  bootstrapChanged,
+  handlePush,
+  handleStatus,
+  isAncestorOfBootstrap,
+  pickConclusions,
+} from "../scripts/ci/main-guard.mjs";
 import { gitleaksArgs, titleOk } from "../scripts/ci/pr-meta.mjs";
+import {
+  evaluateCommit,
+  evaluatePush,
+  planGuardIssue,
+  requiredRoles,
+} from "../scripts/ci/provenance.mjs";
 import {
   RELEASE_TAG,
   RELEASE_TAG_PATTERN,
@@ -23,6 +37,8 @@ import {
 const root = join(import.meta.dirname, "..");
 const workflowDir = join(root, ".github/workflows");
 const listText = readList(root);
+const codeowners = readFileSync(join(root, "CODEOWNERS"), "utf8");
+const plan = readFileSync(join(root, "docs/IMPLEMENTATION_PLAN.md"), "utf8");
 
 function workflowFiles() {
   return readdirSync(workflowDir).filter((name) => name.endsWith(".yml"));
@@ -35,6 +51,7 @@ function workflowText(name: string) {
 function workflow(name: string) {
   return parse(workflowText(name)) as {
     on: Record<string, unknown>;
+    concurrency?: { "cancel-in-progress"?: boolean };
     permissions: Record<string, string>;
     jobs: Record<string, Record<string, unknown>>;
   };
@@ -89,6 +106,13 @@ describe("docs-only classifier", () => {
   it("[AC-OPS-56] a mix with apps is not docs-only", () => {
     assert.equal(
       classify(["docs/x.md", "apps/api/src/index.ts"], listText),
+      false,
+    );
+  });
+
+  it("[AC-OPS-56] the bootstrap file is not docs-only", () => {
+    assert.equal(
+      classify([".github/main-guard-bootstrap.txt"], listText),
       false,
     );
   });
@@ -253,6 +277,616 @@ describe("image cleanup", () => {
   });
 });
 
+function commit(over: Record<string, unknown>) {
+  return {
+    sha: "abc123",
+    pulls: [
+      {
+        merged: true,
+        merge_commit_sha: "abc123",
+        title: "ci(github): workflows [M0-T04]",
+      },
+    ],
+    checks: { "pr-meta": "success", fast: "success" },
+    files: [".github/workflows/ci.yml"],
+    comments: [
+      { body: "REVIEW Architect: APPROVED" },
+      { body: "REVIEW Project Lead: APPROVED" },
+      { body: "REVIEW QA: APPROVED" },
+    ],
+    listText,
+    codeowners,
+    plan,
+    ...over,
+  };
+}
+
+function headSha(dir: string) {
+  const result = spawnSync("git", ["rev-parse", "HEAD"], {
+    cwd: dir,
+    encoding: "utf8",
+  });
+  assert.equal(result.status, 0, result.stderr);
+  return result.stdout.trim();
+}
+
+describe("provenance", () => {
+  it("[AC-OPS-58] passes when pr-meta and fast are green and the review is present", () => {
+    assert.deepEqual(evaluateCommit(commit({})), []);
+  });
+
+  it("[AC-OPS-58] fails when pr-meta is red", () => {
+    const problems = evaluateCommit(
+      commit({ checks: { "pr-meta": "failure", fast: "success" } }),
+    );
+    assert.ok(problems.some((item) => item.problem.includes("pr-meta")));
+  });
+
+  it("[AC-OPS-58] fails when fast is red", () => {
+    const problems = evaluateCommit(
+      commit({ checks: { "pr-meta": "success", fast: "failure" } }),
+    );
+    assert.ok(
+      problems.some((item) => item.problem.includes("fast was not green")),
+    );
+  });
+
+  it("[AC-OPS-58] fails when a run claims docs-only but the files are code", () => {
+    const problems = evaluateCommit(
+      commit({
+        checks: { "pr-meta": "success", fast: "skipped", docs_only: "true" },
+        files: ["apps/api/src/index.ts"],
+      }),
+    );
+    assert.ok(problems.some((item) => item.problem.includes("not docs-only")));
+  });
+
+  it("a later CHANGES REQUESTED overrides an earlier APPROVED", () => {
+    const problems = evaluateCommit(
+      commit({
+        comments: [
+          { body: "REVIEW Architect: APPROVED" },
+          { body: "REVIEW Project Lead: APPROVED" },
+          { body: "REVIEW QA: APPROVED" },
+          { body: "REVIEW Architect: CHANGES REQUESTED: fix the token" },
+        ],
+      }),
+    );
+    assert.ok(
+      problems.some((item) =>
+        item.problem.includes("REVIEW Architect: APPROVED"),
+      ),
+    );
+  });
+
+  it("requires the Designer review named by CODEOWNERS", () => {
+    const problems = evaluateCommit(
+      commit({
+        files: ["docs/DESIGN.md"],
+        pulls: [
+          {
+            merged: true,
+            merge_commit_sha: "abc123",
+            title: "docs: adjust a screen",
+          },
+        ],
+        comments: [{ body: "REVIEW Architect: APPROVED" }],
+      }),
+    );
+    assert.ok(
+      problems.some((item) =>
+        item.problem.includes("REVIEW Designer: APPROVED"),
+      ),
+    );
+  });
+
+  it("[AC-OPS-58] fails when pr-meta is missing", () => {
+    const problems = evaluateCommit(commit({ checks: { fast: "success" } }));
+    assert.ok(problems.some((item) => item.problem.includes("pr-meta")));
+  });
+
+  it("[AC-OPS-58] passes a docs-only pull request whose fast job was skipped", () => {
+    const problems = evaluateCommit(
+      commit({
+        pulls: [
+          {
+            merged: true,
+            merge_commit_sha: "abc123",
+            title: "docs: correct a typo",
+          },
+        ],
+        checks: { "pr-meta": "success", fast: "skipped" },
+        files: ["docs/x.md", "README.md"],
+        comments: [],
+      }),
+    );
+    assert.deepEqual(problems, []);
+  });
+
+  it("[AC-OPS-58] fails when fast was skipped and the files are not docs-only", () => {
+    const problems = evaluateCommit(
+      commit({
+        checks: { "pr-meta": "success", fast: "skipped" },
+        files: ["apps/api/src/index.ts"],
+      }),
+    );
+    assert.ok(problems.some((item) => item.problem.includes("not docs-only")));
+  });
+
+  it("[AC-OPS-58] fails when a required REVIEW comment is missing", () => {
+    const problems = evaluateCommit(commit({ comments: [] }));
+    assert.ok(
+      problems.some((item) =>
+        item.problem.includes("REVIEW Architect: APPROVED"),
+      ),
+    );
+  });
+
+  it("[AC-OPS-59] a direct push and a force push fail provenance", () => {
+    const direct = evaluatePush({
+      commits: [commit({ pulls: [], files: [], comments: [] })],
+    });
+    assert.equal(direct.ok, false);
+    assert.match(direct.problems[0]?.problem ?? "", /no merged pull request/);
+    const forced = evaluatePush({
+      forced: true,
+      after: "def456",
+      commits: [],
+    });
+    assert.equal(forced.ok, false);
+    assert.match(forced.problems[0]?.problem ?? "", /force push/);
+  });
+
+  it("requires Project Lead and QA for an M0 task that delivers criteria", () => {
+    const roles = requiredRoles({
+      files: ["AGENTS.md"],
+      title: "ci(github): workflows [M0-T04]",
+      body: "Delivered: AC-OPS-58",
+      codeowners,
+      plan,
+    });
+    assert.ok(roles.includes("Project Lead"));
+    assert.ok(roles.includes("QA"));
+  });
+
+  it("requires QA when a task-id suffix maps to a plan task", () => {
+    const roles = requiredRoles({
+      files: [".github/workflows/main-guard.yml"],
+      title: "ci(github): main-guard provenance and status [M0-T04b]",
+      body: "Delivered:",
+      codeowners,
+      plan,
+    });
+    assert.ok(roles.includes("QA"));
+  });
+
+  it("requires QA when the pull request body delivers an AC", () => {
+    const roles = requiredRoles({
+      files: ["README.md"],
+      title: "docs: note a detail [M9-T99]",
+      body: "Delivered: AC-OPS-58",
+      codeowners,
+      plan,
+    });
+    assert.ok(roles.includes("QA"));
+    assert.equal(roles.includes("Project Lead"), false);
+  });
+
+  it("skips an ancestor of the bootstrap commit and checks a later one", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "guard-"));
+    try {
+      runGit(["init"], dir);
+      runGit(["config", "user.email", "test@example.com"], dir);
+      runGit(["config", "user.name", "test"], dir);
+      writeFileSync(join(dir, "README.md"), "ancestor\n");
+      runGit(["add", "README.md"], dir);
+      runGit(["commit", "-m", "ancestor"], dir);
+      const ancestor = headSha(dir);
+      writeFileSync(join(dir, "README.md"), "bootstrap\n");
+      runGit(["add", "README.md"], dir);
+      runGit(["commit", "-m", "bootstrap"], dir);
+      const bootstrap = headSha(dir);
+      mkdirSync(join(dir, ".github/workflows"), { recursive: true });
+      writeFileSync(join(dir, ".github/workflows/main-guard.yml"), "name: x\n");
+      writeFileSync(
+        join(dir, ".github/main-guard-bootstrap.txt"),
+        `${bootstrap}\n`,
+      );
+      runGit(["add", ".github"], dir);
+      runGit(["commit", "-m", "land"], dir);
+      const added = headSha(dir);
+      rmSync(join(dir, ".github/workflows/main-guard.yml"));
+      runGit(["add", "-A"], dir);
+      runGit(["commit", "-m", "delete workflow"], dir);
+      const later = headSha(dir);
+      assert.equal(isAncestorOfBootstrap(ancestor, bootstrap, dir), true);
+      assert.equal(isAncestorOfBootstrap(bootstrap, bootstrap, dir), true);
+      assert.equal(isAncestorOfBootstrap(later, bootstrap, dir), false);
+      assert.equal(bootstrapChanged(added, dir), false);
+      assert.equal(bootstrapChanged(later, dir), false);
+      const seen: string[] = [];
+      const result = await handlePush(
+        { forced: false, deleted: false, before: bootstrap, after: later },
+        {
+          github: {
+            async compare() {
+              return {
+                status: "ahead",
+                commits: [{ sha: ancestor }, { sha: later }],
+              };
+            },
+            async listIssues() {
+              return [];
+            },
+            async apply() {
+              return null;
+            },
+          },
+          predates: (sha: string) => isAncestorOfBootstrap(sha, bootstrap, dir),
+          loadCommit: async (sha: string) => {
+            seen.push(sha);
+            return commit({
+              sha,
+              pulls: [
+                {
+                  merged: true,
+                  merge_commit_sha: sha,
+                  title: "docs: adjust a note",
+                },
+              ],
+              files: ["README.md"],
+              comments: [],
+            });
+          },
+        },
+      );
+      assert.deepEqual(seen, [later]);
+      assert.equal(result.ok, true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("a later edit of the bootstrap file is a provenance failure", () => {
+    const dir = mkdtempSync(join(tmpdir(), "guard-edit-"));
+    try {
+      runGit(["init"], dir);
+      runGit(["config", "user.email", "test@example.com"], dir);
+      runGit(["config", "user.name", "test"], dir);
+      writeFileSync(join(dir, "README.md"), "base\n");
+      runGit(["add", "README.md"], dir);
+      runGit(["commit", "-m", "base"], dir);
+      const bootstrap = headSha(dir);
+      mkdirSync(join(dir, ".github"), { recursive: true });
+      writeFileSync(
+        join(dir, ".github/main-guard-bootstrap.txt"),
+        `${bootstrap}\n`,
+      );
+      runGit(["add", ".github/main-guard-bootstrap.txt"], dir);
+      runGit(["commit", "-m", "add bootstrap"], dir);
+      const added = headSha(dir);
+      writeFileSync(
+        join(dir, ".github/main-guard-bootstrap.txt"),
+        `${added}\n`,
+      );
+      runGit(["add", ".github/main-guard-bootstrap.txt"], dir);
+      runGit(["commit", "-m", "move bootstrap"], dir);
+      const edited = headSha(dir);
+      assert.equal(bootstrapChanged(added, dir), false);
+      assert.equal(bootstrapChanged(edited, dir), true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+    const problems = evaluateCommit(commit({ bootstrapChanged: true }));
+    assert.ok(
+      problems.some((item) =>
+        item.problem.includes("main-guard-bootstrap.txt"),
+      ),
+    );
+  });
+
+  it("throws when diff-tree cannot read the commit", () => {
+    const dir = mkdtempSync(join(tmpdir(), "guard-diff-"));
+    try {
+      runGit(["init"], dir);
+      runGit(["config", "user.email", "test@example.com"], dir);
+      runGit(["config", "user.name", "test"], dir);
+      writeFileSync(join(dir, "README.md"), "base\n");
+      runGit(["add", "README.md"], dir);
+      runGit(["commit", "-m", "base"], dir);
+      assert.throws(
+        () => bootstrapChanged("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", dir),
+        /diff-tree failed/,
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("guard issues", () => {
+  it("[AC-OPS-59] a simulated direct push opens one main-guard issue", async () => {
+    const created: { title?: string; body?: string; labels?: string[] }[] = [];
+    const github = {
+      async compare() {
+        return { status: "ahead", commits: [{ sha: "abc123" }] };
+      },
+      async listIssues() {
+        return [];
+      },
+      async apply(planIssue: {
+        action: string;
+        title?: string;
+        body?: string;
+        labels?: string[];
+      }) {
+        assert.equal(planIssue.action, "open");
+        created.push(planIssue);
+      },
+    };
+    const result = await handlePush(
+      { forced: false, deleted: false, before: "aaa", after: "abc123" },
+      {
+        github,
+        predates: () => false,
+        loadCommit: async () => commit({ pulls: [], files: [], comments: [] }),
+      },
+    );
+    assert.equal(result.ok, false);
+    assert.equal(created.length, 1);
+    assert.deepEqual(created[0]?.labels, ["main-guard"]);
+    assert.match(created[0]?.body ?? "", /abc123/);
+    assert.match(created[0]?.body ?? "", /no merged pull request/);
+    assert.match(created[0]?.body ?? "", /revert through a pull request/);
+  });
+
+  it("an ancestor of the bootstrap commit does not open an issue", async () => {
+    let loaded = false;
+    let applied = false;
+    const result = await handlePush(
+      { forced: false, deleted: false, before: "aaa", after: "old" },
+      {
+        github: {
+          async compare() {
+            return { status: "ahead", commits: [{ sha: "abc123" }] };
+          },
+          async listIssues() {
+            return [];
+          },
+          async apply() {
+            applied = true;
+          },
+        },
+        predates: () => true,
+        loadCommit: async () => {
+          loaded = true;
+          return commit({ pulls: [], files: [], comments: [] });
+        },
+      },
+    );
+    assert.equal(result.ok, true);
+    assert.equal(loaded, false);
+    assert.equal(applied, false);
+  });
+
+  it("[AC-OPS-59] a force push opens or comments on the main-guard issue", async () => {
+    const opened: { action?: string; body?: string; labels?: string[] }[] = [];
+    const openedResult = await handlePush(
+      { forced: true, before: "aaa", after: "bbb" },
+      {
+        github: {
+          async listIssues() {
+            return [];
+          },
+          async apply(planIssue: {
+            action?: string;
+            body?: string;
+            labels?: string[];
+          }) {
+            opened.push(planIssue);
+          },
+        },
+      },
+    );
+    assert.equal(openedResult.ok, false);
+    assert.equal(opened[0]?.action, "open");
+    assert.deepEqual(opened[0]?.labels, ["main-guard"]);
+    assert.match(opened[0]?.body ?? "", /force push/);
+    const commented: { action?: string; number?: number; body?: string }[] = [];
+    await handlePush(
+      { forced: true, before: "aaa", after: "ccc" },
+      {
+        github: {
+          async listIssues() {
+            return [{ number: 8, state: "open", labels: ["main-guard"] }];
+          },
+          async apply(planIssue: {
+            action?: string;
+            number?: number;
+            body?: string;
+          }) {
+            commented.push(planIssue);
+          },
+        },
+      },
+    );
+    assert.equal(commented[0]?.action, "comment");
+    assert.equal(commented[0]?.number, 8);
+    assert.match(commented[0]?.body ?? "", /force push/);
+  });
+
+  it("a bootstrap-file edit opens or comments on the main-guard issue", async () => {
+    const opened: { action?: string; body?: string }[] = [];
+    await handlePush(
+      { forced: false, deleted: false, before: "aaa", after: "bbb" },
+      {
+        github: {
+          async compare() {
+            return { status: "ahead", commits: [{ sha: "abc123" }] };
+          },
+          async listIssues() {
+            return [];
+          },
+          async apply(planIssue: { action?: string; body?: string }) {
+            opened.push(planIssue);
+          },
+        },
+        predates: () => false,
+        loadCommit: async () => commit({ bootstrapChanged: true }),
+      },
+    );
+    assert.equal(opened[0]?.action, "open");
+    assert.match(opened[0]?.body ?? "", /main-guard-bootstrap.txt/);
+    const commented: { action?: string; number?: number }[] = [];
+    await handlePush(
+      { forced: false, deleted: false, before: "aaa", after: "ccc" },
+      {
+        github: {
+          async compare() {
+            return { status: "ahead", commits: [{ sha: "def456" }] };
+          },
+          async listIssues() {
+            return [{ number: 9, state: "open", labels: ["main-guard"] }];
+          },
+          async apply(planIssue: { action?: string; number?: number }) {
+            commented.push(planIssue);
+          },
+        },
+        predates: () => false,
+        loadCommit: async () =>
+          commit({ sha: "def456", bootstrapChanged: true }),
+      },
+    );
+    assert.equal(commented[0]?.action, "comment");
+    assert.equal(commented[0]?.number, 9);
+  });
+
+  it("ignores a cancelled check run when a completed one exists", () => {
+    const picked = pickConclusions([
+      {
+        name: "pr-meta",
+        conclusion: "success",
+        completed_at: "2026-10-18T00:00:00Z",
+      },
+      {
+        name: "pr-meta",
+        conclusion: "cancelled",
+        completed_at: "2026-10-18T01:00:00Z",
+      },
+      {
+        name: "fast",
+        conclusion: "cancelled",
+        completed_at: "2026-10-18T02:00:00Z",
+      },
+      {
+        name: "fast",
+        conclusion: "success",
+        completed_at: "2026-10-18T00:30:00Z",
+      },
+    ]);
+    assert.equal(picked["pr-meta"], "success");
+    assert.equal(picked.fast, "success");
+  });
+
+  it("[AC-OPS-59] a second violation comments on the open main-guard issue", () => {
+    const planIssue = planGuardIssue({
+      openIssues: [
+        {
+          number: 7,
+          state: "open",
+          labels: ["main-guard"],
+          pull_request: undefined,
+        },
+      ],
+      label: "main-guard",
+      title: "main-guard: push to main failed provenance",
+      body: "again",
+    });
+    assert.equal(planIssue.action, "comment");
+    assert.equal(planIssue.number, 7);
+  });
+
+  it("[AC-OPS-60] a simulated red run opens one main-red issue", async () => {
+    const created: { labels?: string[]; body?: string }[] = [];
+    const result = await handleStatus(
+      {
+        workflow_run: {
+          conclusion: "failure",
+          id: 9,
+          html_url: "https://example.test/run/9",
+        },
+      },
+      {
+        github: {
+          async jobs() {
+            return [{ name: "fast", conclusion: "failure" }];
+          },
+          async listIssues() {
+            return [];
+          },
+          async apply(planIssue: {
+            action?: string;
+            labels?: string[];
+            body?: string;
+          }) {
+            created.push(planIssue);
+            if (planIssue.action === "open") return { number: 15 };
+            return null;
+          },
+        },
+      },
+    );
+    assert.equal(result.action, "open");
+    assert.equal("number" in result ? result.number : undefined, 15);
+    assert.deepEqual(created[0]?.labels, ["main-red"]);
+    assert.match(created.at(-1)?.body ?? "", /fast/);
+    assert.match(created.at(-1)?.body ?? "", /https:\/\/example\.test\/run\/9/);
+    assert.match(created.at(-1)?.body ?? "", /Fixes #15/);
+    assert.doesNotMatch(created.at(-1)?.body ?? "", /Fixes #N/);
+  });
+
+  it("[AC-OPS-60] a successful run does not open an issue", async () => {
+    let called = false;
+    const result = await handleStatus(
+      { workflow_run: { conclusion: "success", id: 1, html_url: "" } },
+      {
+        github: {
+          async jobs() {
+            called = true;
+            return [];
+          },
+          async listIssues() {
+            return [];
+          },
+          async apply() {
+            called = true;
+          },
+        },
+      },
+    );
+    assert.deepEqual(result, { action: "none" });
+    assert.equal(called, false);
+  });
+
+  it("reopens a closed main-red issue on the next failure", () => {
+    const planIssue = planGuardIssue({
+      openIssues: [
+        {
+          number: 4,
+          state: "closed",
+          labels: ["main-red"],
+          pull_request: undefined,
+        },
+      ],
+      label: "main-red",
+      title: "main-red: ci.yml failed on main",
+      body: "again",
+    });
+    assert.equal(planIssue.action, "reopen");
+    assert.equal(planIssue.number, 4);
+  });
+});
+
 describe("workflows", () => {
   const expected: Record<
     string,
@@ -276,6 +910,25 @@ describe("workflows", () => {
     "cleanup-images.yml": {
       workflow: { contents: "read", packages: "write" },
       jobs: { cleanup: null },
+    },
+    "main-guard.yml": {
+      workflow: {},
+      jobs: {
+        provenance: {
+          contents: "read",
+          "pull-requests": "read",
+          checks: "read",
+          actions: "read",
+          issues: "write",
+        },
+        status: {
+          contents: "read",
+          "pull-requests": "read",
+          checks: "read",
+          actions: "read",
+          issues: "write",
+        },
+      },
     },
   };
 
@@ -315,6 +968,51 @@ describe("workflows", () => {
       assert.equal(release.on.schedule, undefined);
     } else {
       assert.equal(releasePath.endsWith("release.yml"), true);
+    }
+  });
+
+  it("[AC-OPS-60] status starts only after ci.yml fails on main", () => {
+    const guard = workflow("main-guard.yml");
+    const run = guard.on.workflow_run as {
+      workflows: string[];
+      branches: string[];
+    };
+    assert.deepEqual(run.workflows, ["ci"]);
+    assert.deepEqual(run.branches, ["main"]);
+    assert.match(String(guard.jobs.status?.if), /failure/);
+    assert.match(
+      String(guard.jobs.status?.if),
+      /workflow_run\.event == 'push'/,
+    );
+    assert.doesNotMatch(String(guard.jobs.status?.if), /success/);
+    assert.match(String(guard.jobs.provenance?.if), /push/);
+  });
+
+  it("keeps cancel-in-progress false on main-guard and true on ci", () => {
+    const guard = workflow("main-guard.yml").concurrency as {
+      "cancel-in-progress": boolean;
+    };
+    const ci = workflow("ci.yml").concurrency as {
+      "cancel-in-progress": boolean;
+    };
+    assert.equal(guard["cancel-in-progress"], false);
+    assert.equal(ci["cancel-in-progress"], true);
+  });
+
+  it("[AC-OPS-61] main-guard permissions are the five listed scopes", () => {
+    const guard = workflow("main-guard.yml");
+    const spec = expected["main-guard.yml"];
+    assert.deepEqual(guard.permissions ?? {}, spec?.workflow);
+    assert.deepEqual(guard.jobs.provenance?.permissions, spec?.jobs.provenance);
+    assert.deepEqual(guard.jobs.status?.permissions, spec?.jobs.status);
+    const texts = [
+      workflowText("main-guard.yml"),
+      readFileSync(join(root, "scripts/ci/main-guard.mjs"), "utf8"),
+      readFileSync(join(root, "scripts/ci/provenance.mjs"), "utf8"),
+    ];
+    for (const text of texts) {
+      assert.doesNotMatch(text, /git push|git revert|git tag/);
+      assert.doesNotMatch(text, /contents:\s*write/);
     }
   });
 
@@ -363,7 +1061,11 @@ describe("workflows", () => {
   it("uses a three-day artifact retention and cancels superseded runs", () => {
     for (const name of workflowFiles()) {
       const text = workflowText(name);
-      assert.match(text, /cancel-in-progress:\s*true/);
+      if (name === "main-guard.yml") {
+        assert.match(text, /cancel-in-progress:\s*false/);
+      } else {
+        assert.match(text, /cancel-in-progress:\s*true/);
+      }
       if (text.includes("retention-days")) {
         assert.match(text, /retention-days:\s*3\b/);
         assert.doesNotMatch(text, /retention-days:\s*(?!3\b)\d+/);

@@ -1,33 +1,33 @@
 {
-  "note": "M0-T02 label list. This agent could not create GitHub labels (the GitHub CLI is read-only here). Descriptions are only what IMPLEMENTATION_PLAN.md or ADR 0019 states. A description that says the plan does not define application is intentional.",
+  "note": "Descriptions match the labels on GitHub. Apply security-review to auth, secrets, CI, hooks, uploads, or data-access changes; needs-qa to any pull request that delivers acceptance criteria; needs-design to UI or packages/ui changes; needs-support-ops to emails, wording, or runbooks; human-step when a pull request waits on Brandon.",
   "labels": [
     {
       "name": "full-ci",
-      "description": "Runs the full CI job. Required for attachments, ClamAV, E2E, Electron, Docker, and backups."
+      "description": "Runs the full CI job (attachments, ClamAV, E2E, Electron, Docker, backups)."
     },
     {
       "name": "security-review",
-      "description": "Named in M0-T02. The plan does not say when to apply it."
+      "description": "Touches auth, secrets, CI/workflows, hooks, uploads or data access; Architect review required."
     },
     {
       "name": "needs-qa",
-      "description": "Named in M0-T02. The plan does not say when to apply it."
+      "description": "Delivers acceptance criteria; QA review required."
     },
     {
       "name": "needs-design",
-      "description": "Named in M0-T02. The plan does not say when to apply it."
+      "description": "Changes UI or packages/ui; Designer review required."
     },
     {
       "name": "needs-support-ops",
-      "description": "Named in M0-T02. The plan does not say when to apply it."
+      "description": "Changes customer emails, wording or runbooks; Support Ops review required."
     },
     {
       "name": "blocked",
-      "description": "Project Lead hold. A held pull request does not merge (plan §5.5)."
+      "description": "Project Lead hold. A held pull request does not merge (plan 5.5)."
     },
     {
       "name": "human-step",
-      "description": "Named in M0-T02. The plan does not say when to apply it."
+      "description": "Waiting on a step only Brandon can do (logged in HUMAN_STEPS_LOG)."
     },
     {
       "name": "beta-bug",

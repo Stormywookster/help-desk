@@ -5,7 +5,6 @@
 # Roles: Architect, QA, Designer, Support Ops, Project Lead.
 # QA reviews every pull request that delivers acceptance criteria. That duty is
 # not a path rule. Paths below are the §17 layout areas named by §5.3.
-# The plan does not list these exact paths. See the M0-T02 open questions.
 
 apps/api/	Architect
 apps/portal/	Designer

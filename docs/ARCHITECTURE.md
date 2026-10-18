@@ -1052,7 +1052,7 @@ Workflows read `github.event.repository.private` and pick the right triggers, so
 
 Anything under `.github/`, `scripts/`, `deploy/`, `openapi/`, `apps/`, or `packages/` is never docs-only, and so is a change to the list file itself, so a PR can't make itself docs-only by editing the list.
 
-All workflows use `concurrency` with `cancel-in-progress` (a new push cancels the old run), npm and Playwright caches, and short artifact retention (3 days). On private repos artifacts share the **500 MB** storage quota with GitHub Packages (non-container).
+All workflows use `concurrency`. `cancel-in-progress` is true, except `main-guard.yml`, which sets it false: each provenance run checks only its own `before..after` range, so cancelling it would leave commits unchecked. Workflows also use npm and Playwright caches, and short artifact retention (3 days). On private repos artifacts share the **500 MB** storage quota with GitHub Packages (non-container).
 
 **Minutes budget.**
 - **Private (current, B1), GitHub Free:** 2,000 minutes/month, with Windows minutes counted **double**. Rough monthly estimate with the triggers above:

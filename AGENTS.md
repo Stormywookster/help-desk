@@ -82,6 +82,7 @@ No secret is committed. Real values stay in the server `.env` and in Brandon's p
 `npm ci` runs `prepare`, which runs `npm run hooks:install` (`git config core.hooksPath .githooks`).
 
 - `.githooks/pre-commit` runs `gitleaks protect --staged`. A finding refuses the commit. If `gitleaks` is not on `PATH`, the hook refuses the commit.
+- Install gitleaks with `bash scripts/ci/install-gitleaks.sh`. The script downloads a pinned release and checks its checksum before installing. Use that script in CI and locally.
 - `.githooks/pre-push` refuses every push whose remote ref is `refs/heads/main`, including a force-push or a delete.
 
 ## Parallel work (plan §5.7)
@@ -100,4 +101,4 @@ Before starting, comment `CLAIMED <task-id>` on the milestone issue, and open a 
 
 ## CI minutes (plan §6.4)
 
-The private repo has 2,000 Actions minutes a month. ARCHITECTURE §16.3 estimates about 1,820 (about 91%), including about 150 minutes for `pr-meta` and about 45 for `main-guard`. When usage reaches 75% (1,500 minutes), the Project Lead switches `full` on `main` from every push to every 3 hours. That saves about 300 minutes and brings the month to about 1,520. Run `npm run verify` before pushing, push once the work is ready, and add the `full-ci` label only where plan §5.2 requires it. Workflow `concurrency` cancels a run that a newer push replaces.
+The private repo has 2,000 Actions minutes a month. ARCHITECTURE §16.3 estimates about 1,820 (about 91%), including about 150 minutes for `pr-meta` and about 45 for `main-guard`. When usage reaches 75% (1,500 minutes), the Project Lead switches `full` on `main` from every push to every 3 hours. That saves about 300 minutes and brings the month to about 1,520. Run `npm run verify` before pushing, push once the work is ready, and add the `full-ci` label only where plan §5.2 requires it. Workflow `concurrency` cancels a run that a newer push replaces, except `main-guard`, which sets `cancel-in-progress` false so each provenance range is checked.
