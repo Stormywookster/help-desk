@@ -34,6 +34,10 @@ export function evaluatePush(input) {
 export function evaluateCommit(commit) {
   const problems = [];
   const sha = commit.sha;
+  if (commit.parentless === true) {
+    problems.push({ commit: sha, problem: "commit has no parent" });
+    return problems;
+  }
   const merged = (commit.pulls ?? []).filter(
     (pull) => pull.merged === true && pull.merge_commit_sha === sha,
   );

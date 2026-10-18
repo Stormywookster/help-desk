@@ -102,10 +102,16 @@ start_mailpit() {
     current="$(mailpit version 2>/dev/null || true)"
   fi
   if [[ "$current" != *"$MAILPIT_VERSION"* ]]; then
-    local march tmp
+    local march tmp sum
     case "$(uname -m)" in
-      x86_64) march=amd64 ;;
-      aarch64 | arm64) march=arm64 ;;
+      x86_64)
+        march=amd64
+        sum=10fa12ccc610f653d4ed4df848c1817f9935dcf4e9a6a458a19ab0fa02093f91
+        ;;
+      aarch64 | arm64)
+        march=arm64
+        sum=de07955b783236d9129da76da9a5970f1777834a18b2c07611de957be784dafe
+        ;;
       *)
         echo "dev-setup: unsupported architecture $(uname -m)" >&2
         exit 1
@@ -114,6 +120,7 @@ start_mailpit() {
     log "installing Mailpit ${MAILPIT_VERSION}"
     tmp="$(mktemp -d)"
     curl -fsSL "https://github.com/axllent/mailpit/releases/download/v${MAILPIT_VERSION}/mailpit-linux-${march}.tar.gz" -o "$tmp/mailpit.tar.gz"
+    echo "$sum  $tmp/mailpit.tar.gz" | sha256sum -c -
     sudo tar -C /usr/local/bin -xzf "$tmp/mailpit.tar.gz" mailpit
     sudo chmod 755 /usr/local/bin/mailpit
     rm -rf "$tmp"

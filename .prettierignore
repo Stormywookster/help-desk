@@ -1,5 +1,6 @@
 docs
 node_modules
+.semgrep
 package-lock.json
 dist
 CODEOWNERS
