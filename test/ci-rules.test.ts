@@ -265,13 +265,13 @@ describe("workflows", () => {
       workflow: { contents: "read" },
       jobs: {
         "pr-meta": null,
-        fast: { contents: "read", actions: "write" },
-        full: { contents: "read", actions: "write" },
+        fast: { contents: "read" },
+        full: { contents: "read" },
       },
     },
     "scheduled.yml": {
       workflow: { contents: "read" },
-      jobs: { weekly: { contents: "read", actions: "write" } },
+      jobs: { weekly: { contents: "read" } },
     },
     "cleanup-images.yml": {
       workflow: { contents: "read", packages: "write" },
