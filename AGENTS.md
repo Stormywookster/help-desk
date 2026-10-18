@@ -82,6 +82,7 @@ No secret is committed. Real values stay in the server `.env` and in Brandon's p
 `npm ci` runs `prepare`, which runs `npm run hooks:install` (`git config core.hooksPath .githooks`).
 
 - `.githooks/pre-commit` runs `gitleaks protect --staged`. A finding refuses the commit. If `gitleaks` is not on `PATH`, the hook refuses the commit.
+- Install gitleaks with `bash scripts/ci/install-gitleaks.sh`. The script downloads a pinned release and checks its checksum before installing. Use that script in CI and locally.
 - `.githooks/pre-push` refuses every push whose remote ref is `refs/heads/main`, including a force-push or a delete.
 
 ## Parallel work (plan §5.7)

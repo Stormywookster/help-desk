@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import {
+  mkdirSync,
   mkdtempSync,
   readdirSync,
   readFileSync,
@@ -14,7 +15,18 @@ import { describe, it } from "vitest";
 import { versionsToDelete } from "../scripts/ci/cleanup-images.mjs";
 import { LIST_PATH, classify, readList } from "../scripts/ci/docs-only.mjs";
 import { fastRuns, fullRuns, scheduledRuns } from "../scripts/ci/gates.mjs";
+import {
+  commitFollowsGuard,
+  handlePush,
+  handleStatus,
+} from "../scripts/ci/main-guard.mjs";
 import { gitleaksArgs, titleOk } from "../scripts/ci/pr-meta.mjs";
+import {
+  evaluateCommit,
+  evaluatePush,
+  planGuardIssue,
+  requiredRoles,
+} from "../scripts/ci/provenance.mjs";
 import {
   RELEASE_TAG,
   RELEASE_TAG_PATTERN,
@@ -23,6 +35,8 @@ import {
 const root = join(import.meta.dirname, "..");
 const workflowDir = join(root, ".github/workflows");
 const listText = readList(root);
+const codeowners = readFileSync(join(root, "CODEOWNERS"), "utf8");
+const plan = readFileSync(join(root, "docs/IMPLEMENTATION_PLAN.md"), "utf8");
 
 function workflowFiles() {
   return readdirSync(workflowDir).filter((name) => name.endsWith(".yml"));
@@ -253,6 +267,307 @@ describe("image cleanup", () => {
   });
 });
 
+function commit(over: Record<string, unknown>) {
+  return {
+    sha: "abc123",
+    pulls: [
+      {
+        merged: true,
+        merge_commit_sha: "abc123",
+        title: "ci(github): workflows [M0-T04]",
+      },
+    ],
+    checks: { "pr-meta": "success", fast: "success" },
+    files: [".github/workflows/ci.yml"],
+    comments: [
+      { body: "REVIEW Architect: APPROVED" },
+      { body: "REVIEW Project Lead: APPROVED" },
+      { body: "REVIEW QA: APPROVED" },
+    ],
+    listText,
+    codeowners,
+    plan,
+    ...over,
+  };
+}
+
+function headSha(dir: string) {
+  const result = spawnSync("git", ["rev-parse", "HEAD"], {
+    cwd: dir,
+    encoding: "utf8",
+  });
+  assert.equal(result.status, 0, result.stderr);
+  return result.stdout.trim();
+}
+
+describe("provenance", () => {
+  it("[AC-OPS-58] passes when pr-meta and fast are green and the review is present", () => {
+    assert.deepEqual(evaluateCommit(commit({})), []);
+  });
+
+  it("[AC-OPS-58] fails when pr-meta is red", () => {
+    const problems = evaluateCommit(
+      commit({ checks: { "pr-meta": "failure", fast: "success" } }),
+    );
+    assert.ok(problems.some((item) => item.problem.includes("pr-meta")));
+  });
+
+  it("[AC-OPS-58] fails when fast is red", () => {
+    const problems = evaluateCommit(
+      commit({ checks: { "pr-meta": "success", fast: "failure" } }),
+    );
+    assert.ok(
+      problems.some((item) => item.problem.includes("fast was not green")),
+    );
+  });
+
+  it("[AC-OPS-58] passes a docs-only pull request whose fast job was skipped", () => {
+    const problems = evaluateCommit(
+      commit({
+        pulls: [
+          {
+            merged: true,
+            merge_commit_sha: "abc123",
+            title: "docs: correct a typo",
+          },
+        ],
+        checks: { "pr-meta": "success", fast: "skipped" },
+        files: ["docs/x.md", "README.md"],
+        comments: [],
+      }),
+    );
+    assert.deepEqual(problems, []);
+  });
+
+  it("[AC-OPS-58] fails when fast was skipped and the files are not docs-only", () => {
+    const problems = evaluateCommit(
+      commit({
+        checks: { "pr-meta": "success", fast: "skipped" },
+        files: ["apps/api/src/index.ts"],
+      }),
+    );
+    assert.ok(problems.some((item) => item.problem.includes("not docs-only")));
+  });
+
+  it("[AC-OPS-58] fails when a required REVIEW comment is missing", () => {
+    const problems = evaluateCommit(commit({ comments: [] }));
+    assert.ok(
+      problems.some((item) =>
+        item.problem.includes("REVIEW Architect: APPROVED"),
+      ),
+    );
+  });
+
+  it("[AC-OPS-59] a direct push and a force push fail provenance", () => {
+    const direct = evaluatePush({
+      commits: [commit({ pulls: [], files: [], comments: [] })],
+    });
+    assert.equal(direct.ok, false);
+    assert.match(direct.problems[0]?.problem ?? "", /no merged pull request/);
+    const forced = evaluatePush({
+      forced: true,
+      after: "def456",
+      commits: [],
+    });
+    assert.equal(forced.ok, false);
+    assert.match(forced.problems[0]?.problem ?? "", /force push/);
+  });
+
+  it("requires Project Lead and QA for an M0 task that delivers criteria", () => {
+    const roles = requiredRoles({
+      files: ["AGENTS.md"],
+      title: "ci(github): workflows [M0-T04]",
+      codeowners,
+      plan,
+    });
+    assert.ok(roles.includes("Project Lead"));
+    assert.ok(roles.includes("QA"));
+  });
+
+  it("checks a commit only after the workflow is already on a parent", () => {
+    const dir = mkdtempSync(join(tmpdir(), "guard-"));
+    try {
+      runGit(["init"], dir);
+      runGit(["config", "user.email", "test@example.com"], dir);
+      runGit(["config", "user.name", "test"], dir);
+      writeFileSync(join(dir, "README.md"), "before\n");
+      runGit(["add", "README.md"], dir);
+      runGit(["commit", "-m", "before"], dir);
+      const before = headSha(dir);
+      mkdirSync(join(dir, ".github/workflows"), { recursive: true });
+      writeFileSync(join(dir, ".github/workflows/main-guard.yml"), "name: x\n");
+      runGit(["add", ".github/workflows/main-guard.yml"], dir);
+      runGit(["commit", "-m", "land"], dir);
+      const land = headSha(dir);
+      writeFileSync(join(dir, "README.md"), "after\n");
+      runGit(["add", "README.md"], dir);
+      runGit(["commit", "-m", "after"], dir);
+      const after = headSha(dir);
+      assert.equal(commitFollowsGuard(before, dir), false);
+      assert.equal(commitFollowsGuard(land, dir), false);
+      assert.equal(commitFollowsGuard(after, dir), true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("guard issues", () => {
+  it("[AC-OPS-59] a simulated direct push opens one main-guard issue", async () => {
+    const created: { title?: string; body?: string; labels?: string[] }[] = [];
+    const github = {
+      async compare() {
+        return { status: "ahead", commits: [{ sha: "abc123" }] };
+      },
+      async listIssues() {
+        return [];
+      },
+      async apply(planIssue: {
+        action: string;
+        title?: string;
+        body?: string;
+        labels?: string[];
+      }) {
+        assert.equal(planIssue.action, "open");
+        created.push(planIssue);
+      },
+    };
+    const result = await handlePush(
+      { forced: false, deleted: false, before: "aaa", after: "abc123" },
+      {
+        github,
+        followsGuard: () => true,
+        loadCommit: async () => commit({ pulls: [], files: [], comments: [] }),
+      },
+    );
+    assert.equal(result.ok, false);
+    assert.equal(created.length, 1);
+    assert.deepEqual(created[0]?.labels, ["main-guard"]);
+    assert.match(created[0]?.body ?? "", /abc123/);
+    assert.match(created[0]?.body ?? "", /no merged pull request/);
+    assert.match(created[0]?.body ?? "", /revert through a pull request/);
+  });
+
+  it("[AC-OPS-59] a commit from before the workflow does not open an issue", async () => {
+    let loaded = false;
+    let applied = false;
+    const result = await handlePush(
+      { forced: false, deleted: false, before: "aaa", after: "old" },
+      {
+        github: {
+          async compare() {
+            return { status: "ahead", commits: [{ sha: "abc123" }] };
+          },
+          async listIssues() {
+            return [];
+          },
+          async apply() {
+            applied = true;
+          },
+        },
+        followsGuard: () => false,
+        loadCommit: async () => {
+          loaded = true;
+          return commit({ pulls: [], files: [], comments: [] });
+        },
+      },
+    );
+    assert.equal(result.ok, true);
+    assert.equal(loaded, false);
+    assert.equal(applied, false);
+  });
+
+  it("[AC-OPS-59] a second violation comments on the open main-guard issue", () => {
+    const planIssue = planGuardIssue({
+      openIssues: [
+        {
+          number: 7,
+          state: "open",
+          labels: ["main-guard"],
+          pull_request: undefined,
+        },
+      ],
+      label: "main-guard",
+      title: "main-guard: push to main failed provenance",
+      body: "again",
+    });
+    assert.equal(planIssue.action, "comment");
+    assert.equal(planIssue.number, 7);
+  });
+
+  it("[AC-OPS-60] a simulated red run opens one main-red issue", async () => {
+    const created: { labels?: string[]; body?: string }[] = [];
+    const result = await handleStatus(
+      {
+        workflow_run: {
+          conclusion: "failure",
+          id: 9,
+          html_url: "https://example.test/run/9",
+        },
+      },
+      {
+        github: {
+          async jobs() {
+            return [{ name: "fast", conclusion: "failure" }];
+          },
+          async listIssues() {
+            return [];
+          },
+          async apply(planIssue: { labels?: string[]; body?: string }) {
+            created.push(planIssue);
+          },
+        },
+      },
+    );
+    assert.equal(result.action, "open");
+    assert.deepEqual(created[0]?.labels, ["main-red"]);
+    assert.match(created[0]?.body ?? "", /fast/);
+    assert.match(created[0]?.body ?? "", /https:\/\/example\.test\/run\/9/);
+    assert.match(created[0]?.body ?? "", /Fixes #N/);
+  });
+
+  it("[AC-OPS-60] a successful run does not open an issue", async () => {
+    let called = false;
+    const result = await handleStatus(
+      { workflow_run: { conclusion: "success", id: 1, html_url: "" } },
+      {
+        github: {
+          async jobs() {
+            called = true;
+            return [];
+          },
+          async listIssues() {
+            return [];
+          },
+          async apply() {
+            called = true;
+          },
+        },
+      },
+    );
+    assert.deepEqual(result, { action: "none" });
+    assert.equal(called, false);
+  });
+
+  it("reopens a closed main-red issue on the next failure", () => {
+    const planIssue = planGuardIssue({
+      openIssues: [
+        {
+          number: 4,
+          state: "closed",
+          labels: ["main-red"],
+          pull_request: undefined,
+        },
+      ],
+      label: "main-red",
+      title: "main-red: ci.yml failed on main",
+      body: "again",
+    });
+    assert.equal(planIssue.action, "reopen");
+    assert.equal(planIssue.number, 4);
+  });
+});
+
 describe("workflows", () => {
   const expected: Record<
     string,
@@ -276,6 +591,16 @@ describe("workflows", () => {
     "cleanup-images.yml": {
       workflow: { contents: "read", packages: "write" },
       jobs: { cleanup: null },
+    },
+    "main-guard.yml": {
+      workflow: {
+        contents: "read",
+        "pull-requests": "read",
+        checks: "read",
+        actions: "read",
+        issues: "write",
+      },
+      jobs: { provenance: null, status: null },
     },
   };
 
@@ -315,6 +640,35 @@ describe("workflows", () => {
       assert.equal(release.on.schedule, undefined);
     } else {
       assert.equal(releasePath.endsWith("release.yml"), true);
+    }
+  });
+
+  it("[AC-OPS-60] status starts only after ci.yml fails on main", () => {
+    const guard = workflow("main-guard.yml");
+    const run = guard.on.workflow_run as {
+      workflows: string[];
+      branches: string[];
+    };
+    assert.deepEqual(run.workflows, ["ci"]);
+    assert.deepEqual(run.branches, ["main"]);
+    assert.match(String(guard.jobs.status?.if), /failure/);
+    assert.doesNotMatch(String(guard.jobs.status?.if), /success/);
+    assert.match(String(guard.jobs.provenance?.if), /push/);
+  });
+
+  it("[AC-OPS-61] main-guard permissions are the five listed scopes", () => {
+    const guard = workflow("main-guard.yml");
+    assert.deepEqual(guard.permissions, expected["main-guard.yml"]?.workflow);
+    assert.equal(guard.jobs.provenance?.permissions, undefined);
+    assert.equal(guard.jobs.status?.permissions, undefined);
+    const texts = [
+      workflowText("main-guard.yml"),
+      readFileSync(join(root, "scripts/ci/main-guard.mjs"), "utf8"),
+      readFileSync(join(root, "scripts/ci/provenance.mjs"), "utf8"),
+    ];
+    for (const text of texts) {
+      assert.doesNotMatch(text, /git push|git revert|git tag/);
+      assert.doesNotMatch(text, /contents:\s*write/);
     }
   });
 
