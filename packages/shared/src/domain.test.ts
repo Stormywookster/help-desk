@@ -370,6 +370,26 @@ const lc51: Array<{ title: string; from: Status; to: Status }> = [
     from: "cancelled",
     to: "waiting_on_customer",
   },
+  {
+    title: "[AC-LC-51] Admin cannot set Closed to New",
+    from: "closed",
+    to: "new",
+  },
+  {
+    title: "[AC-LC-51] Admin cannot set Cancelled to New",
+    from: "cancelled",
+    to: "new",
+  },
+  {
+    title: "[AC-LC-51] Admin cannot set Closed to Open",
+    from: "closed",
+    to: "open",
+  },
+  {
+    title: "[AC-LC-51] Admin cannot set Cancelled to Open",
+    from: "cancelled",
+    to: "open",
+  },
 ];
 
 function ctx(now: string, reopenWindowDays = 14) {
@@ -507,6 +527,19 @@ describe("staff status changes", () => {
       );
     });
   }
+
+  it("Agent set_status on a Closed ticket and on a Cancelled ticket returns 409 TICKET_READ_ONLY", () => {
+    for (const from of ["closed", "cancelled"] as const) {
+      assert.deepEqual(
+        transition(
+          make(from, true, "agent-9"),
+          { action: "set_status", actor: agent, to: "open" },
+          ctx(NOW),
+        ),
+        { ok: false, httpStatus: 409, code: "TICKET_READ_ONLY" },
+      );
+    }
+  });
 });
 
 describe("reopen window and auto-close clock", () => {
@@ -592,6 +625,34 @@ describe("reopen window and auto-close clock", () => {
     );
     assert.equal(viewed.status, "resolved");
     assert.equal(viewed.autoCloseDueAt, DUE);
+    const sevenDaysLater = new Date(
+      Date.parse(RESOLVED_AT) + 7 * 24 * 60 * 60 * 1000,
+    ).toISOString();
+    assert.deepEqual(
+      transition(
+        resolved,
+        { action: "auto_close", actor: system },
+        ctx(sevenDaysLater, 7),
+      ),
+      { ok: false, httpStatus: null, code: null },
+    );
+    const reopened = asOk(
+      transition(
+        resolved,
+        { action: "customer_reopen", actor: customer },
+        ctx(sevenDaysLater, 7),
+      ),
+    );
+    assert.equal(reopened.ticket?.status, "open");
+    const closed = asTicket(
+      transition(
+        resolved,
+        { action: "auto_close", actor: system },
+        ctx(DUE, 7),
+      ),
+    );
+    assert.equal(closed.status, "closed");
+    assert.equal(closed.autoCloseDueAt, DUE);
   });
 
   it("[AC-CLOSE-17] 336 elapsed hours across the autumn clock change read 9:00 AM ET", () => {
