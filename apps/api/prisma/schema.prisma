@@ -1,0 +1,453 @@
+// ARCHITECTURE §5. Triggers, checks, generated search vectors, and the
+// needs_attention partial index live in the SQL migration. Keep them when
+// adding a later migration; do not regenerate this one with migrate dev.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  administrator
+  agent
+
+  @@map("user_role")
+}
+
+enum ClientType {
+  web
+  desktop
+  android
+
+  @@map("client_type")
+}
+
+enum MfaFactorType {
+  totp
+  webauthn
+
+  @@map("mfa_factor_type")
+}
+
+enum TicketImpact {
+  question    @map("Just a question")
+  not_working @map("Something isn't working")
+  blocked     @map("I can't use the product at all")
+
+  @@map("ticket_impact")
+}
+
+enum TicketStatus {
+  new
+  open
+  in_progress
+  waiting_on_customer
+  resolved
+  closed
+  cancelled
+
+  @@map("ticket_status")
+}
+
+enum TicketPriority {
+  low
+  normal
+  high
+  urgent
+
+  @@map("ticket_priority")
+}
+
+enum AuthorType {
+  customer
+  staff
+
+  @@map("author_type")
+}
+
+enum MessageVisibility {
+  public
+  internal
+
+  @@map("message_visibility")
+}
+
+enum UploadedByType {
+  customer
+  staff
+
+  @@map("uploaded_by_type")
+}
+
+enum ScanStatus {
+  pending
+  clean
+  infected
+  error
+  rejected
+
+  @@map("scan_status")
+}
+
+enum ActorType {
+  customer
+  staff
+  system
+
+  @@map("actor_type")
+}
+
+enum SecureLinkPurpose {
+  lookup
+  notification
+  reopen
+
+  @@map("secure_link_purpose")
+}
+
+enum OutboxStatus {
+  pending
+  sending
+  sent
+  failed
+
+  @@map("outbox_status")
+}
+
+enum IdempotencyState {
+  in_progress
+  completed
+
+  @@map("idempotency_state")
+}
+
+enum BackupKind {
+  backup
+  restore_test
+
+  @@map("backup_kind")
+}
+
+enum BackupOutcome {
+  success
+  failure
+
+  @@map("backup_outcome")
+}
+
+model User {
+  id                   String    @id @default(dbgenerated("helpdesk_uuidv7()")) @db.Uuid
+  email                String    @unique @db.Citext
+  display_name         String
+  role                 UserRole
+  password_hash        String
+  password_changed_at  DateTime  @default(now()) @db.Timestamptz(6)
+  must_change_password Boolean   @default(false)
+  is_active            Boolean   @default(true)
+  mfa_required         Boolean   @default(false)
+  locked_until         DateTime? @db.Timestamptz(6)
+  last_login_at        DateTime? @db.Timestamptz(6)
+  created_at           DateTime  @default(now()) @db.Timestamptz(6)
+
+  sessions                 Session[]
+  mfa_factors              UserMfaFactor[]
+  login_attempts           LoginAttempt[]
+  assigned_tickets         Ticket[]        @relation("TicketAssignee")
+  first_accepted_tickets   Ticket[]        @relation("TicketFirstAccepted")
+  messages                 TicketMessage[]
+  uploaded_attachments     Attachment[]
+  events                   TicketEvent[]
+  settings_updated         Setting[]
+  audit_entries            AuditLog[]
+
+  @@map("users")
+}
+
+model Session {
+  id                   String     @id @default(dbgenerated("helpdesk_uuidv7()")) @db.Uuid
+  user_id              String     @db.Uuid
+  token_hash           Bytes      @unique
+  client_type          ClientType
+  auth_methods         String
+  mfa_verified_at      DateTime?  @db.Timestamptz(6)
+  idle_expires_at      DateTime   @db.Timestamptz(6)
+  absolute_expires_at  DateTime   @db.Timestamptz(6)
+  revoked_at           DateTime?  @db.Timestamptz(6)
+  ip                   String?    @db.Inet
+  user_agent           String?
+  user                 User       @relation(fields: [user_id], references: [id], onDelete: Restrict)
+
+  @@index([user_id])
+  @@map("sessions")
+}
+
+model UserMfaFactor {
+  id               String        @id @default(dbgenerated("helpdesk_uuidv7()")) @db.Uuid
+  user_id          String        @db.Uuid
+  type             MfaFactorType
+  secret_encrypted Bytes?
+  credential_id    Bytes?
+  public_key       Bytes?
+  sign_count       BigInt?
+  disabled_at      DateTime?     @db.Timestamptz(6)
+  user             User          @relation(fields: [user_id], references: [id], onDelete: Restrict)
+
+  @@index([user_id])
+  @@map("user_mfa_factors")
+}
+
+model LoginAttempt {
+  id              BigInt   @id @default(autoincrement())
+  email_attempted String   @db.Citext
+  user_id         String?  @db.Uuid
+  ip              String?  @db.Inet
+  success         Boolean
+  reason          String?
+  created_at      DateTime @default(now()) @db.Timestamptz(6)
+  user            User?    @relation(fields: [user_id], references: [id], onDelete: Restrict)
+
+  @@index([user_id])
+  @@map("login_attempts")
+}
+
+model Product {
+  id         String   @id @default(dbgenerated("helpdesk_uuidv7()")) @db.Uuid
+  name       String   @unique
+  is_active  Boolean  @default(true)
+  sort_order Int
+  tickets    Ticket[]
+
+  @@map("products")
+}
+
+model Ticket {
+  id                      String          @id @default(dbgenerated("helpdesk_uuidv7()")) @db.Uuid
+  reference               String          @unique
+  product_id              String          @db.Uuid
+  customer_email          String          @db.Citext
+  customer_name           String?
+  subject                 String
+  description             String
+  impact                  TicketImpact?
+  status                  TicketStatus
+  priority                TicketPriority  @default(normal)
+  assignee_id             String?         @db.Uuid
+  assigned_at             DateTime?       @db.Timestamptz(6)
+  first_accepted_by_id    String?         @db.Uuid
+  first_accepted_at       DateTime?       @db.Timestamptz(6)
+  needs_attention         Boolean
+  needs_attention_reason  String?
+  resolved_at             DateTime?       @db.Timestamptz(6)
+  auto_close_due_at       DateTime?       @db.Timestamptz(6)
+  closed_at               DateTime?       @db.Timestamptz(6)
+  cancelled_at            DateTime?       @db.Timestamptz(6)
+  email_confirmed_at      DateTime?       @db.Timestamptz(6)
+  email_thread_message_id String?
+  privacy_ack_at          DateTime?       @db.Timestamptz(6)
+  privacy_notice_version  String?
+  context                 Json?
+  version                 Int             @default(0)
+  search_vector           Unsupported("tsvector")?
+  created_at              DateTime        @default(now()) @db.Timestamptz(6)
+  updated_at              DateTime        @default(now()) @db.Timestamptz(6)
+
+  product            Product                  @relation(fields: [product_id], references: [id], onDelete: Restrict)
+  assignee           User?                    @relation("TicketAssignee", fields: [assignee_id], references: [id], onDelete: Restrict)
+  first_accepted_by  User?                    @relation("TicketFirstAccepted", fields: [first_accepted_by_id], references: [id], onDelete: Restrict)
+  messages           TicketMessage[]
+  attachments        Attachment[]
+  events             TicketEvent[]
+  secure_links       SecureLink[]
+  access_sessions    CustomerAccessSession[]
+  outbox             EmailOutbox[]
+  idempotency_keys   IdempotencyKey[]
+
+  @@index([product_id])
+  @@index([assignee_id])
+  @@index([first_accepted_by_id])
+  @@index([customer_email])
+  @@map("tickets")
+}
+
+model TicketMessage {
+  id             String            @id @default(dbgenerated("helpdesk_uuidv7()")) @db.Uuid
+  ticket_id      String            @db.Uuid
+  author_type    AuthorType
+  author_user_id String?           @db.Uuid
+  visibility     MessageVisibility
+  body           String
+  search_vector  Unsupported("tsvector")?
+  created_at     DateTime          @default(now()) @db.Timestamptz(6)
+
+  ticket      Ticket       @relation(fields: [ticket_id], references: [id], onDelete: Cascade)
+  author      User?        @relation(fields: [author_user_id], references: [id], onDelete: Restrict)
+  attachments Attachment[]
+
+  @@index([ticket_id])
+  @@index([author_user_id])
+  @@map("ticket_messages")
+}
+
+model Attachment {
+  id                   String         @id @default(dbgenerated("helpdesk_uuidv7()")) @db.Uuid
+  ticket_id            String         @db.Uuid
+  message_id           String         @db.Uuid
+  uploaded_by_type     UploadedByType
+  uploaded_by_user_id  String?        @db.Uuid
+  original_filename    String
+  storage_key          String         @unique
+  detected_mime        String?
+  size_bytes           BigInt
+  sha256               Bytes
+  scan_status          ScanStatus     @default(pending)
+  scan_result          String?
+  scan_attempts        Int            @default(0)
+  scanned_at           DateTime?      @db.Timestamptz(6)
+  created_at           DateTime       @default(now()) @db.Timestamptz(6)
+
+  ticket      Ticket        @relation(fields: [ticket_id], references: [id], onDelete: Cascade)
+  message     TicketMessage @relation(fields: [message_id], references: [id], onDelete: Cascade)
+  uploaded_by User?         @relation(fields: [uploaded_by_user_id], references: [id], onDelete: Restrict)
+
+  @@index([ticket_id])
+  @@index([message_id])
+  @@index([uploaded_by_user_id])
+  @@map("attachments")
+}
+
+model TicketEvent {
+  id               BigInt        @id @default(autoincrement())
+  ticket_id        String        @db.Uuid
+  type             String
+  actor_type       ActorType
+  actor_user_id    String?       @db.Uuid
+  from_status      TicketStatus?
+  to_status        TicketStatus?
+  data             Json?
+  customer_visible Boolean
+  created_at       DateTime      @default(now()) @db.Timestamptz(6)
+
+  ticket Ticket @relation(fields: [ticket_id], references: [id], onDelete: Cascade)
+  actor  User?  @relation(fields: [actor_user_id], references: [id], onDelete: Restrict)
+
+  @@index([ticket_id])
+  @@index([actor_user_id])
+  @@map("ticket_events")
+}
+
+model SecureLink {
+  id           String            @id @default(dbgenerated("helpdesk_uuidv7()")) @db.Uuid
+  ticket_id    String            @db.Uuid
+  token_hash   Bytes             @unique
+  purpose      SecureLinkPurpose
+  expires_at   DateTime          @db.Timestamptz(6)
+  revoked_at   DateTime?         @db.Timestamptz(6)
+  last_used_at DateTime?         @db.Timestamptz(6)
+  use_count    Int               @default(0)
+  created_at   DateTime          @default(now()) @db.Timestamptz(6)
+
+  ticket   Ticket                  @relation(fields: [ticket_id], references: [id], onDelete: Cascade)
+  sessions CustomerAccessSession[]
+
+  @@index([ticket_id])
+  @@map("secure_links")
+}
+
+model CustomerAccessSession {
+  id                   String    @id @default(dbgenerated("helpdesk_uuidv7()")) @db.Uuid
+  ticket_id            String    @db.Uuid
+  secure_link_id       String    @db.Uuid
+  token_hash           Bytes     @unique
+  idle_expires_at      DateTime  @db.Timestamptz(6)
+  absolute_expires_at  DateTime  @db.Timestamptz(6)
+  revoked_at           DateTime? @db.Timestamptz(6)
+
+  ticket      Ticket     @relation(fields: [ticket_id], references: [id], onDelete: Cascade)
+  secure_link SecureLink @relation(fields: [secure_link_id], references: [id], onDelete: Cascade)
+
+  @@index([ticket_id])
+  @@index([secure_link_id])
+  @@map("customer_access_sessions")
+}
+
+model EmailOutbox {
+  id              String       @id @default(dbgenerated("helpdesk_uuidv7()")) @db.Uuid
+  template        String
+  to_address      String       @db.Citext
+  ticket_id       String?      @db.Uuid
+  params          Json
+  status          OutboxStatus @default(pending)
+  attempts        Int          @default(0)
+  next_attempt_at DateTime?    @db.Timestamptz(6)
+  last_error      String?
+  idempotency_key String       @unique
+  sent_at         DateTime?    @db.Timestamptz(6)
+
+  ticket Ticket? @relation(fields: [ticket_id], references: [id], onDelete: Cascade)
+
+  @@index([ticket_id])
+  @@map("email_outbox")
+}
+
+model IdempotencyKey {
+  key_hash            Bytes            @id
+  scope               String
+  request_fingerprint Bytes
+  state               IdempotencyState
+  response_status     Int?
+  response_body       Json?
+  ticket_id           String?          @db.Uuid
+  expires_at          DateTime         @db.Timestamptz(6)
+
+  ticket Ticket? @relation(fields: [ticket_id], references: [id], onDelete: Cascade)
+
+  @@index([ticket_id])
+  @@map("idempotency_keys")
+}
+
+model Setting {
+  key        String    @id
+  value      Json
+  updated_by String?   @db.Uuid
+  updated_at DateTime  @default(now()) @db.Timestamptz(6)
+  editor     User?     @relation(fields: [updated_by], references: [id], onDelete: Restrict)
+
+  @@index([updated_by])
+  @@map("settings")
+}
+
+model AuditLog {
+  id            BigInt   @id @default(autoincrement())
+  actor_user_id String?  @db.Uuid
+  action        String
+  data          Json
+  ip            String?  @db.Inet
+  created_at    DateTime @default(now()) @db.Timestamptz(6)
+  actor         User?    @relation(fields: [actor_user_id], references: [id], onDelete: Restrict)
+
+  @@index([actor_user_id])
+  @@map("audit_log")
+}
+
+model BackupRun {
+  id          BigInt         @id @default(autoincrement())
+  kind        BackupKind
+  outcome     BackupOutcome
+  detail      String?
+  started_at  DateTime       @db.Timestamptz(6)
+  finished_at DateTime?      @db.Timestamptz(6)
+
+  @@map("backup_runs")
+}
+
+/// Solved ALTCHA challenges (ARCHITECTURE §5): signature hash and expiry.
+model CaptchaSpent {
+  signature_hash Bytes    @id
+  expires_at     DateTime @db.Timestamptz(6)
+
+  @@map("captcha_spent")
+}

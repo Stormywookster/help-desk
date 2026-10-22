@@ -33,5 +33,11 @@
     "typescript-eslint": "^8.71.2",
     "vitest": "^5.0.5",
     "yaml": "^2.9.1"
+  },
+  "allowScripts": {
+    "prisma@6.19.3": true,
+    "@prisma/client@6.19.3": true,
+    "@prisma/engines@6.19.3": true,
+    "esbuild@0.28.2": true
   }
 }
