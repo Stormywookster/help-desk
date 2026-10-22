@@ -61,7 +61,8 @@ jobs:
           --health-timeout 5s
           --health-retries 5
     env:
-      DATABASE_URL: postgres://helpdesk:change-me@localhost:5432/helpdesk_test
+      BOOTSTRAP_DATABASE_URL: postgres://helpdesk:change-me@localhost:5432/helpdesk_test
+      DATABASE_URL: postgres://helpdesk_app:change-me@localhost:5432/helpdesk_test
       MIGRATE_DATABASE_URL: postgres://helpdesk_owner:change-me@localhost:5432/helpdesk_test
       APP_DATABASE_URL: postgres://helpdesk_app:change-me@localhost:5432/helpdesk_test
       SCANNER: fake
@@ -76,6 +77,7 @@ jobs:
           cache: npm
       - run: bash scripts/ci/install-gitleaks.sh
       - run: npm ci
+      - run: ./node_modules/.bin/tsx scripts/ci/bootstrap-db.ts
       - run: npm run verify
       - name: Semgrep CE
         run: |
@@ -127,7 +129,8 @@ jobs:
         ports:
           - 3310:3310
     env:
-      DATABASE_URL: postgres://helpdesk:change-me@localhost:5432/helpdesk_test
+      BOOTSTRAP_DATABASE_URL: postgres://helpdesk:change-me@localhost:5432/helpdesk_test
+      DATABASE_URL: postgres://helpdesk_app:change-me@localhost:5432/helpdesk_test
       MIGRATE_DATABASE_URL: postgres://helpdesk_owner:change-me@localhost:5432/helpdesk_test
       APP_DATABASE_URL: postgres://helpdesk_app:change-me@localhost:5432/helpdesk_test
       SCANNER: fake
@@ -140,6 +143,7 @@ jobs:
           node-version-file: .nvmrc
           cache: npm
       - run: npm ci
+      - run: ./node_modules/.bin/tsx scripts/ci/bootstrap-db.ts
       - run: bash scripts/ci/full-job.sh
       - run: echo "full finished" > ci-step.txt
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

@@ -17,6 +17,7 @@ import { testClock } from "../src/clock.js";
 import { seedDatabase } from "../src/seed.js";
 import {
   APP_TABLES,
+  assignDatabaseOwner,
   createAudit,
   createEvent,
   createMessage,
@@ -24,12 +25,14 @@ import {
   createTicket,
   createUser,
   ensurePrivilegeRoles,
+  preparePublicSchema,
   truncateAll,
 } from "../src/test-db.js";
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "../../..");
 const schema = "apps/api/prisma/schema.prisma";
 const databaseUrl = process.env.DATABASE_URL;
+const bootstrapUrl = process.env.BOOTSTRAP_DATABASE_URL ?? databaseUrl;
 
 function roleUrl(base: string, user: string): string {
   const url = new URL(base);
@@ -62,7 +65,7 @@ function deploy(): void {
   runPrisma(["migrate", "deploy", "--schema", schema]);
 }
 
-function emptyDatabase(): void {
+function emptyDatabase(url: string): void {
   runPrisma(
     ["db", "execute", "--stdin", "--schema", schema],
     [
@@ -71,6 +74,7 @@ function emptyDatabase(): void {
       "GRANT ALL ON SCHEMA public TO public;",
       "GRANT ALL ON SCHEMA public TO CURRENT_USER;",
     ].join("\n"),
+    url,
   );
 }
 
@@ -85,20 +89,24 @@ function permissionDenied(error: unknown): boolean {
 }
 
 beforeAll(async () => {
-  if (!databaseUrl || !ownerUrl || !appUrl) {
-    throw new Error("DATABASE_URL is required for schema integration tests");
+  if (!bootstrapUrl || !ownerUrl || !appUrl) {
+    throw new Error(
+      "BOOTSTRAP_DATABASE_URL or DATABASE_URL is required for schema integration tests",
+    );
   }
-  const bootstrap = new PrismaClient({ datasourceUrl: databaseUrl });
+  const bootstrap = new PrismaClient({ datasourceUrl: bootstrapUrl });
   try {
     await ensurePrivilegeRoles(
       bootstrap,
       passwordOf(ownerUrl),
       passwordOf(appUrl),
     );
+    await assignDatabaseOwner(bootstrap);
+    emptyDatabase(bootstrapUrl);
+    await preparePublicSchema(bootstrap);
   } finally {
     await bootstrap.$disconnect();
   }
-  emptyDatabase();
   deploy();
   prisma = new PrismaClient({ datasourceUrl: ownerUrl });
   app = new PrismaClient({ datasourceUrl: appUrl });
@@ -578,17 +586,22 @@ describe("purge privileges", () => {
 
   async function ensureOtherRole(): Promise<void> {
     const literal = quoteLiteral(passwordOf(appUrl));
-    await prisma.$executeRawUnsafe(`
-      DO $roles$
-      BEGIN
-        IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'helpdesk_other') THEN
-          CREATE ROLE helpdesk_other LOGIN NOSUPERUSER NOINHERIT PASSWORD ${literal};
-        ELSE
-          ALTER ROLE helpdesk_other WITH LOGIN NOSUPERUSER NOINHERIT PASSWORD ${literal};
-        END IF;
-      END
-      $roles$;
-    `);
+    const bootstrap = new PrismaClient({ datasourceUrl: bootstrapUrl });
+    try {
+      await bootstrap.$executeRawUnsafe(`
+        DO $roles$
+        BEGIN
+          IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'helpdesk_other') THEN
+            CREATE ROLE helpdesk_other LOGIN NOSUPERUSER NOBYPASSRLS NOINHERIT PASSWORD ${literal};
+          ELSE
+            ALTER ROLE helpdesk_other WITH LOGIN NOSUPERUSER NOBYPASSRLS NOINHERIT PASSWORD ${literal};
+          END IF;
+        END
+        $roles$;
+      `);
+    } finally {
+      await bootstrap.$disconnect();
+    }
   }
 
   it("keeps ownership, execute grants, and the truncate triggers", async () => {
@@ -648,9 +661,56 @@ describe("purge privileges", () => {
       assert.equal(fn.owner, "helpdesk_owner");
       assert.equal(fn.security_definer, true);
       assert.ok(
-        fn.config?.some((entry) => entry === "search_path=pg_catalog, public"),
+        fn.config?.some(
+          (entry) => entry === "search_path=pg_catalog, public, pg_temp",
+        ),
       );
     }
+    const bodies = await prisma.$queryRaw<{ name: string; body: string }[]>`
+      SELECT p.proname AS name, p.prosrc AS body
+      FROM pg_proc AS p
+      WHERE p.proname IN ('helpdesk_purge_ticket', 'helpdesk_erase_customer')
+    `;
+    for (const fn of bodies) {
+      assert.match(fn.body, /public\.audit_log/);
+      assert.match(fn.body, /public\.tickets/);
+      assert.match(fn.body, /pg_catalog\.set_config/);
+      assert.equal(fn.body.includes("strpos"), false);
+    }
+    const deletePrivileges = await prisma.$queryRaw<{ relname: string }[]>`
+      SELECT c.relname
+      FROM pg_class AS c
+      JOIN pg_namespace AS n ON n.oid = c.relnamespace
+      WHERE n.nspname = 'public'
+        AND c.relkind = 'r'
+        AND has_table_privilege('helpdesk_app', c.oid, 'DELETE')
+      ORDER BY c.relname
+    `;
+    assert.deepEqual(
+      deletePrivileges.map((row) => row.relname),
+      [
+        "attachments",
+        "backup_runs",
+        "captcha_spent",
+        "customer_access_sessions",
+        "email_outbox",
+        "idempotency_keys",
+        "login_attempts",
+        "secure_links",
+        "sessions",
+        "settings",
+        "user_mfa_factors",
+      ],
+    );
+    const truncatePrivileges = await prisma.$queryRaw<{ count: number }[]>`
+      SELECT count(*)::int AS count
+      FROM pg_class AS c
+      JOIN pg_namespace AS n ON n.oid = c.relnamespace
+      WHERE n.nspname = 'public'
+        AND c.relkind = 'r'
+        AND has_table_privilege('helpdesk_app', c.oid, 'TRUNCATE')
+    `;
+    assert.equal(truncatePrivileges[0]?.count, 0);
     const truncateTriggers = await prisma.$queryRaw<{ count: number }[]>`
       SELECT count(*)::int AS count
       FROM pg_trigger
@@ -700,16 +760,19 @@ describe("purge privileges", () => {
     );
   });
 
-  it("denies direct history deletes, truncates, and audit updates from the app role", async () => {
+  it("denies ticket and history deletes and truncates from the app role while purge is on", async () => {
     const product = await createProduct(app);
     const ticket = await createTicket(app, product.id);
     const message = await createMessage(app, ticket.id);
     const event = await createEvent(app, ticket.id);
     const audit = await createAudit(app, { ip: "203.0.113.9" });
     const statements = [
+      `DELETE FROM tickets WHERE id = '${ticket.id}'`,
       `DELETE FROM ticket_events WHERE id = ${event.id}`,
       `DELETE FROM ticket_messages WHERE id = '${message.id}'`,
       `DELETE FROM audit_log WHERE id = ${audit.id}`,
+      `TRUNCATE TABLE tickets`,
+      `TRUNCATE TABLE tickets CASCADE`,
       `TRUNCATE TABLE ticket_events`,
       `TRUNCATE TABLE ticket_messages`,
       `TRUNCATE TABLE audit_log`,
@@ -725,6 +788,7 @@ describe("purge privileges", () => {
         permissionDenied,
       );
     }
+    assert.equal(await app.ticket.count(), 1);
     assert.equal(await app.ticketEvent.count(), 1);
     assert.equal(await app.ticketMessage.count(), 1);
     assert.equal(await app.auditLog.count(), 1);
@@ -892,6 +956,202 @@ describe("purge privileges", () => {
     assert.equal(erasedText.includes("ada@example.com"), false);
     assert.equal(erasedText.includes("Ada Customer"), false);
     assert.equal(erasedText.includes("Printer jam"), false);
+  });
+
+  it("keeps both roles non-superuser and stops the app bypassing row level security", async () => {
+    const roles = await prisma.$queryRaw<
+      {
+        rolname: string;
+        rolsuper: boolean;
+        rolcreaterole: boolean;
+        rolcanlogin: boolean;
+        rolbypassrls: boolean;
+        rolinherit: boolean;
+      }[]
+    >`
+      SELECT rolname, rolsuper, rolcreaterole, rolcanlogin, rolbypassrls, rolinherit
+      FROM pg_roles
+      WHERE rolname IN ('helpdesk_owner', 'helpdesk_app')
+      ORDER BY rolname
+    `;
+    assert.deepEqual(
+      roles.map((role) => role.rolname),
+      ["helpdesk_app", "helpdesk_owner"],
+    );
+    for (const role of roles) {
+      assert.equal(role.rolsuper, false);
+      assert.equal(role.rolbypassrls, false);
+      assert.equal(role.rolcanlogin, true);
+    }
+    const owner = roles.find((role) => role.rolname === "helpdesk_owner");
+    const appRole = roles.find((role) => role.rolname === "helpdesk_app");
+    assert.equal(owner?.rolcreaterole, false);
+    assert.equal(appRole?.rolinherit, false);
+    const databaseOwner = await prisma.$queryRaw<{ owner: string }[]>`
+      SELECT r.rolname AS owner
+      FROM pg_database AS d
+      JOIN pg_roles AS r ON r.oid = d.datdba
+      WHERE d.datname = current_database()
+    `;
+    assert.equal(databaseOwner[0]?.owner, "helpdesk_owner");
+
+    await prisma.$executeRaw`CREATE TABLE public.rls_probe (id integer)`;
+    try {
+      await prisma.$executeRaw`ALTER TABLE public.rls_probe ENABLE ROW LEVEL SECURITY`;
+      await prisma.$executeRaw`INSERT INTO public.rls_probe (id) VALUES (1)`;
+      await prisma.$executeRaw`GRANT SELECT ON public.rls_probe TO helpdesk_app`;
+      const asOwner = await prisma.$queryRaw<{ count: number }[]>`
+        SELECT count(*)::int AS count FROM public.rls_probe
+      `;
+      const asApp = await app.$queryRaw<{ count: number }[]>`
+        SELECT count(*)::int AS count FROM public.rls_probe
+      `;
+      assert.equal(asOwner[0]?.count, 1);
+      assert.equal(asApp[0]?.count, 0);
+    } finally {
+      await prisma.$executeRaw`DROP TABLE IF EXISTS public.rls_probe`;
+    }
+  });
+
+  it("grants a future table select, insert, and update, and not delete or truncate", async () => {
+    await prisma.$executeRaw`CREATE TABLE public.privilege_probe (id integer)`;
+    try {
+      const privileges = await prisma.$queryRaw<
+        {
+          can_select: boolean;
+          can_insert: boolean;
+          can_update: boolean;
+          can_delete: boolean;
+          can_truncate: boolean;
+        }[]
+      >`
+        SELECT
+          has_table_privilege('helpdesk_app', 'public.privilege_probe', 'SELECT') AS can_select,
+          has_table_privilege('helpdesk_app', 'public.privilege_probe', 'INSERT') AS can_insert,
+          has_table_privilege('helpdesk_app', 'public.privilege_probe', 'UPDATE') AS can_update,
+          has_table_privilege('helpdesk_app', 'public.privilege_probe', 'DELETE') AS can_delete,
+          has_table_privilege('helpdesk_app', 'public.privilege_probe', 'TRUNCATE') AS can_truncate
+      `;
+      assert.equal(privileges[0]?.can_select, true);
+      assert.equal(privileges[0]?.can_insert, true);
+      assert.equal(privileges[0]?.can_update, true);
+      assert.equal(privileges[0]?.can_delete, false);
+      assert.equal(privileges[0]?.can_truncate, false);
+    } finally {
+      await prisma.$executeRaw`DROP TABLE IF EXISTS public.privilege_probe`;
+    }
+  });
+
+  it("writes the real audit row when the app has a temp table named audit_log", async () => {
+    const user = await createUser(app, { role: "administrator" });
+    const product = await createProduct(app);
+    const ticket = await createTicket(app, product.id);
+    const before = await app.auditLog.count();
+    await app.$transaction(async (tx) => {
+      await tx.$executeRawUnsafe(
+        `CREATE TEMP TABLE audit_log (id integer) ON COMMIT DROP`,
+      );
+      await tx.$executeRaw`SELECT public.helpdesk_purge_ticket(${ticket.id}::uuid, ${user.id}::uuid)`;
+      await tx.$executeRaw`SELECT set_config('search_path', 'pg_temp, public', true)`;
+      const tempRows = await tx.$queryRaw<{ count: number }[]>`
+        SELECT count(*)::int AS count FROM audit_log
+      `;
+      const written = await tx.$queryRaw<{ count: number }[]>`
+        SELECT count(*)::int AS count
+        FROM public.audit_log
+        WHERE action = 'ticket.hard_deleted' AND actor_user_id = ${user.id}::uuid
+      `;
+      assert.equal(tempRows[0]?.count, 0);
+      assert.equal(written[0]?.count, 1);
+    });
+    assert.equal(await app.ticket.count({ where: { id: ticket.id } }), 0);
+    assert.equal(await app.auditLog.count(), before + 1);
+  });
+
+  it("redacts audit rows by exact identifiers and leaves a similar name untouched", async () => {
+    const user = await createUser(app, { role: "administrator" });
+    const product = await createProduct(app);
+    const ann = await createTicket(app, product.id, {
+      customer_email: "ann@example.com",
+      customer_name: "Ann",
+    });
+    const joanna = await createTicket(app, product.id, {
+      customer_email: "joanna@example.com",
+      customer_name: "Joanna",
+    });
+    const byTicket = await createAudit(app, {
+      action: "ticket.note",
+      data: { ticket_id: ann.id },
+    });
+    const byCustomerId = await createAudit(app, {
+      action: "customer.note",
+      data: { customer_id: "ANN@example.com", note: "exact id" },
+    });
+    const byTicketList = await createAudit(app, {
+      action: "ticket.list",
+      data: { ticket_ids: [ann.id, "not-a-uuid"], messages: 1 },
+    });
+    const notAUuid = await createAudit(app, {
+      action: "ticket.bad",
+      data: { ticket_id: "not-a-uuid", note: "Ann stopped by" },
+    });
+    const joannaAudit = await createAudit(app, {
+      action: "customer.note",
+      data: {
+        customer_email: "joanna@example.com",
+        customer_name: "Joanna",
+        note: "Joanna asked Ann for help",
+        reference: joanna.reference,
+        messages: 1,
+      },
+    });
+    await app.$executeRaw`SELECT helpdesk_erase_customer(${"Ann@Example.com"}::citext, ${user.id}::uuid)`;
+
+    assert.equal(await app.ticket.count({ where: { id: ann.id } }), 0);
+    assert.equal(
+      (await app.ticket.findUniqueOrThrow({ where: { id: joanna.id } }))
+        .customer_name,
+      "Joanna",
+    );
+
+    const redactedTicket = await app.auditLog.findUniqueOrThrow({
+      where: { id: byTicket.id },
+    });
+    const ticketData = redactedTicket.data as Record<string, unknown>;
+    assert.equal(ticketData.ticket_id, ann.id);
+    assert.equal(typeof ticketData.redacted_at, "string");
+
+    const redactedCustomer = await app.auditLog.findUniqueOrThrow({
+      where: { id: byCustomerId.id },
+    });
+    const customerData = redactedCustomer.data as Record<string, unknown>;
+    assert.equal(customerData.customer_id, "[redacted]");
+    assert.equal(customerData.note, "[redacted]");
+    assert.equal(typeof customerData.redacted_at, "string");
+
+    const redactedList = await app.auditLog.findUniqueOrThrow({
+      where: { id: byTicketList.id },
+    });
+    const listData = redactedList.data as {
+      ticket_ids: string[];
+      messages: number;
+      redacted_at: string;
+    };
+    assert.deepEqual(listData.ticket_ids, [ann.id, "not-a-uuid"]);
+    assert.equal(listData.messages, 1);
+    assert.equal(typeof listData.redacted_at, "string");
+
+    const invalid = await app.auditLog.findUniqueOrThrow({
+      where: { id: notAUuid.id },
+    });
+    assert.deepEqual(invalid.data, notAUuid.data);
+    assert.equal(JSON.stringify(invalid.data).includes("redacted_at"), false);
+
+    const untouched = await app.auditLog.findUniqueOrThrow({
+      where: { id: joannaAudit.id },
+    });
+    assert.deepEqual(untouched.data, joannaAudit.data);
+    assert.equal(JSON.stringify(untouched.data).includes("redacted_at"), false);
   });
 
   it("denies direct execution by a role other than helpdesk_app", async () => {

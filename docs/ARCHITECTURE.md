@@ -416,6 +416,7 @@ erDiagram
 Notes:
 - **Assignment history** (§6) is the `assigned` / `accepted` / `unassigned` rows in `ticket_events` (with from/to user IDs in `data`), plus the current values on `tickets` (`assignee_id`, `assigned_at`, `first_accepted_by_id`, `first_accepted_at`).
 - **Append-only history** (P23): a database trigger rejects every `UPDATE` on `ticket_events`, `ticket_messages`, and `audit_log`, and rejects `DELETE` unless the transaction has set `SET LOCAL helpdesk.purge = 'on'`. Only the hard-delete and privacy-erase code paths do that. Customers can't edit their subject or description (§7): those columns have no update path in the API, and a trigger blocks changes.
+- **Database roles and privileges** (T49): `helpdesk_owner` (LOGIN, NOSUPERUSER) owns the database, schema, tables and functions and runs migrations; `citext` and `pgcrypto` are trusted extensions, so it creates them itself (or bootstrap pre-creates them). `helpdesk_app` (LOGIN, NOSUPERUSER, NOINHERIT) is the API login and owns nothing. It gets SELECT/INSERT/UPDATE on all tables and DELETE only where the app deletes rows directly; it never gets TRUNCATE on any table, nor DELETE on `tickets`, `ticket_events`, `ticket_messages` or `audit_log`, nor UPDATE on `audit_log`. `ALTER DEFAULT PRIVILEGES FOR ROLE helpdesk_owner` grants the same baseline (no TRUNCATE) on future tables and sequences; `CREATE` on schema `public` is revoked from PUBLIC. Hard delete and erase go only through `SECURITY DEFINER` functions `public.helpdesk_purge_ticket(ticket_id, actor)` and `public.helpdesk_erase_customer(email, actor)`: owned by `helpdesk_owner`, `SET search_path = pg_catalog, public, pg_temp`, every object schema-qualified, `set_config('helpdesk.purge', 'on', true)` set inside the function, EXECUTE revoked from PUBLIC and granted only to `helpdesk_app`. Purge writes one content-free `audit_log` row (references and counts) and leaves older rows untouched. Erase never deletes `audit_log` rows: in rows that mention the customer it replaces every value except references and counts with `"[redacted]"`, adds `data.redacted_at`, and sets `ip` to NULL where `actor_user_id IS NULL`. The `audit_log` UPDATE trigger allows a change to `data` and `ip` only, and only with the GUC on. TRUNCATE is blocked twice: `REVOKE TRUNCATE` from `helpdesk_app` and the `BEFORE TRUNCATE` triggers on the history tables. The GUC is a second guard; table privileges are the enforcement.
 - **Hard delete / privacy erase** (P21, R4): deletes the ticket, its messages, events, attachments (database rows and files), secure links, access sessions, and outbox rows. It then writes an `audit_log` row containing only: who, when, the reference number(s), and counts. No content and no customer email. See gap G3.
 - **First-run setup code:** stored as a hash with an expiry in `settings` (`setup_code_hash`, `setup_code_expires_at`); deleted the moment the first Administrator exists.
 - **Settings keys** (P20, B5, B10, T2, T6): `products` live in their own table; `settings` holds:
@@ -854,9 +855,12 @@ All live in `/opt/helpdesk/.env` (production/staging) or `.env.local` (dev). The
 | `HD_INTERNAL_IP_ALLOWLIST` | empty (off) | | Optional: only these IPs/CIDRs may call `/auth`, `/internal`, `/admin` |
 | `COOKIE_SECURE` | `true` (must be true in production) | | Secure flag on cookies (false only for LAN staging) |
 | `POSTGRES_DB` | `helpdesk` | | DB name |
-| `POSTGRES_USER` | `helpdesk` | | DB user |
+| `POSTGRES_USER` | `helpdesk` | | Bootstrap superuser of the postgres image; creates the two roles below; never the API login (T49) |
 | `POSTGRES_PASSWORD` | gen | **yes** | DB password |
-| `DATABASE_URL` | `postgresql://helpdesk:${POSTGRES_PASSWORD}@db:5432/helpdesk` | **yes** | Built from the above |
+| `POSTGRES_OWNER_PASSWORD` | gen | **yes** | Password for `helpdesk_owner` (T49) |
+| `POSTGRES_APP_PASSWORD` | gen | **yes** | Password for `helpdesk_app` (T49) |
+| `DATABASE_URL` | `postgresql://helpdesk_app:${POSTGRES_APP_PASSWORD}@db:5432/helpdesk` | **yes** | API runtime connection as `helpdesk_app`, which owns nothing (T49, §5) |
+| `MIGRATE_DATABASE_URL` | `postgresql://helpdesk_owner:${POSTGRES_OWNER_PASSWORD}@db:5432/helpdesk` | **yes** | Migrations and bootstrap only, as `helpdesk_owner`; keep it out of the runtime API environment wherever possible (T49) |
 | `HD_TOKEN_PEPPER` | gen (32 bytes) | **yes** | HMAC key for session and secure-link token hashes (changing it logs everyone out and kills links) |
 | `HD_DATA_ENCRYPTION_KEY` | gen (32 bytes) | **yes** | Reserved: future MFA secrets encryption |
 | `ARGON2_MEMORY_KIB` / `ARGON2_ITERATIONS` / `ARGON2_PARALLELISM` | `19456` / `2` / `1` | | Hash cost |
@@ -1516,3 +1520,6 @@ Applied Brandon's Round 5 answers B1–B10 and the Project Lead's team decisions
 ### Revision 2026-10-18 (9): T45, T46
 - **T45:** when a staff status change moves a ticket out of `new` and auto-assigns the person acting, `first_accepted_by/at` is recorded if not already set (§4 accept row).
 - **T46:** customer reply, cancel or reopen in a disallowed state returns `409 TICKET_READ_ONLY`, the same code as staff; DESIGN owns the customer wording (§4 rows, §6.3 customer endpoints).
+
+### Revision 2026-10-22 (10): T49
+- **T49:** two database roles: `helpdesk_owner` (NOSUPERUSER, owns everything, migrations only via `MIGRATE_DATABASE_URL`) and `helpdesk_app` (API runtime via `DATABASE_URL`, owns nothing, no TRUNCATE, no DELETE on tickets or history, no UPDATE on `audit_log`); purge and erase only through owner-owned `SECURITY DEFINER` functions; erase redacts audit rows in place instead of deleting them (§5 roles note, §14).
