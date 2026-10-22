@@ -78,7 +78,7 @@ function newPassword(flow: PasswordFlow) {
     if (!decision.ok) {
       ctx.addIssue({
         code: "custom",
-        message: decision.message ?? decision.code,
+        message: decision.message,
       });
     }
   });

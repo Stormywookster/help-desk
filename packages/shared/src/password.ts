@@ -1,9 +1,10 @@
 /**
- * Staff password policy (ARCHITECTURE §7, G25).
- * Offline check against a bundled common/breached list. No third-party calls.
- * The docs require the list and do not name a corpus, so this is a small set
- * of well-known common passwords, including entries of 15 or more characters.
+ * Staff password policy (ARCHITECTURE §7, G25, TM-4).
+ * Offline check against the bundled common-password list. No third-party calls.
+ * The list, its source, and its license live in ./data/.
  */
+
+import { COMMON_PASSWORDS } from "./data/common-passwords.js";
 
 export const PASSWORD_MIN_LENGTH = 15;
 export const PASSWORD_MAX_LENGTH = 128;
@@ -20,39 +21,10 @@ export type PasswordFlow = (typeof PASSWORD_FLOWS)[number];
 export type PasswordDecision =
   | { ok: true }
   | { ok: false; code: "TOO_SHORT"; message: string }
-  | { ok: false; code: "TOO_LONG"; message: string | undefined }
+  | { ok: false; code: "TOO_LONG"; message: string }
   | { ok: false; code: "BREACHED"; message: string };
 
-const BREACHED_PASSWORDS = [
-  "password",
-  "123456",
-  "12345678",
-  "qwerty",
-  "abc123",
-  "letmein",
-  "admin",
-  "welcome",
-  "iloveyou",
-  "monkey",
-  "dragon",
-  "master",
-  "login",
-  "princess",
-  "football",
-  "shadow",
-  "sunshine",
-  "trustno1",
-  "password1",
-  "123456789012345",
-  "passwordpassword",
-  "qwertyuiopasdfg",
-  "letmeinletmein1",
-  "iloveyouiloveyou",
-  "aaaaaaaaaaaaaaa",
-  "000000000000000",
-] as const;
-
-const BREACHED = new Set<string>(BREACHED_PASSWORDS);
+const BREACHED = new Set<string>(COMMON_PASSWORDS);
 
 export function passwordPolicy(): {
   minLength: number;
@@ -83,12 +55,23 @@ function tooShortMessage(flow: PasswordFlow): string {
   return `Your password needs at least ${min} characters.`;
 }
 
-/** DESIGN states this sentence for setup (W-02) and change-own-password (W-04). */
-function tooLongMessage(flow: PasswordFlow): string | undefined {
-  if (flow === "setup" || flow === "change_own") {
-    return `Passwords can be at most ${String(PASSWORD_MAX_LENGTH)} characters.`;
+/**
+ * DESIGN states this sentence for setup (W-02) and change-own (W-04).
+ * The Project Lead maps the same sentence onto Admin add-user and Admin
+ * reset-password, so the TOO_LONG code is not the text a screen shows.
+ */
+function tooLongMessage(flow: PasswordFlow): string {
+  switch (flow) {
+    case "setup":
+    case "change_own":
+    case "admin_add":
+    case "admin_reset":
+      return `Passwords can be at most ${String(PASSWORD_MAX_LENGTH)} characters.`;
+    default: {
+      const neverFlow: never = flow;
+      return neverFlow;
+    }
   }
-  return undefined;
 }
 
 function breachedMessage(flow: PasswordFlow): string {

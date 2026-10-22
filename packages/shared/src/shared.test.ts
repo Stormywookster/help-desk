@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
+import { randomBytes } from "node:crypto";
 import { describe, it } from "vitest";
 
+import { COMMON_PASSWORDS } from "./data/common-passwords.js";
 import {
   BRANDING_ENV_KEYS,
   BRANDING_SETTING_KEYS,
@@ -10,15 +12,20 @@ import {
   PRIORITY_LABELS,
   REFERENCE_ALPHABET,
   REFERENCE_PATTERN,
+  changePasswordBodySchema,
   checkPassword,
   copyCatalog,
+  createUserBodySchema,
   customerMessageBodySchema,
   formatEventTimeEt,
   generateReference,
   normalizeEmail,
   passwordHelper,
+  passwordPolicy,
   prioritySchema,
   publicTicketFieldsSchema,
+  resetPasswordBodySchema,
+  setupAdminBodySchema,
   uploadLimit,
 } from "./index.js";
 
@@ -35,6 +42,16 @@ function ticket(overrides: Record<string, unknown> = {}) {
     captcha: "solved",
     ...overrides,
   };
+}
+
+function issueMessage(result: {
+  success: boolean;
+  error?: { issues: readonly { message: string }[] };
+}): string {
+  assert.equal(result.success, false);
+  const message = result.error?.issues[0]?.message;
+  assert.equal(typeof message, "string");
+  return message ?? "";
 }
 
 function successor(reference: string): string | undefined {
@@ -103,20 +120,105 @@ describe("shared schemas", () => {
   });
 
   it("[AC-ROLE-19] a 129-character password is rejected and a 128-character password is accepted", () => {
+    const tooLong = "Passwords can be at most 128 characters.";
     for (const flow of FLOWS) {
       const rejected = checkPassword("b".repeat(129), flow);
       assert.equal(rejected.ok, false);
-      if (!rejected.ok) assert.equal(rejected.code, "TOO_LONG");
+      if (!rejected.ok) {
+        assert.equal(rejected.code, "TOO_LONG");
+        assert.equal(rejected.message, tooLong);
+      }
       assert.deepEqual(checkPassword("b".repeat(128), flow), { ok: true });
     }
-    const setup = checkPassword("b".repeat(129), "setup");
-    const change = checkPassword("b".repeat(129), "change_own");
-    if (!setup.ok) {
-      assert.equal(setup.message, "Passwords can be at most 128 characters.");
+  });
+
+  it("passwordPolicy returns a minimum of 15 and a maximum of 128", () => {
+    assert.deepEqual(passwordPolicy(), { minLength: 15, maxLength: 128 });
+  });
+
+  it("the bundled common-password list is 15 to 128 characters and rejects a listed entry", () => {
+    assert.equal(COMMON_PASSWORDS.length >= 100, true);
+    const listed = new Set<string>(COMMON_PASSWORDS);
+    for (const entry of COMMON_PASSWORDS) {
+      assert.equal(entry.length >= 15 && entry.length <= 128, true);
     }
-    if (!change.ok) {
-      assert.equal(change.message, "Passwords can be at most 128 characters.");
+    const sample = COMMON_PASSWORDS[0];
+    assert.equal(typeof sample, "string");
+    for (const flow of FLOWS) {
+      const rejected = checkPassword(sample ?? "", flow);
+      assert.equal(rejected.ok, false);
+      if (!rejected.ok) assert.equal(rejected.code, "BREACHED");
     }
+    const alphabet =
+      "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789";
+    let fresh = "";
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const bytes = randomBytes(20);
+      fresh = Array.from(
+        bytes,
+        (byte) => alphabet[byte % alphabet.length],
+      ).join("");
+      if (!listed.has(fresh)) break;
+    }
+    assert.equal(fresh.length, 20);
+    assert.equal(listed.has(fresh), false);
+    for (const flow of FLOWS) {
+      assert.deepEqual(checkPassword(fresh, flow), { ok: true });
+    }
+  });
+
+  it("body schemas pass the password flow for setup, change-own, add-user, and reset", () => {
+    const short = "a".repeat(14);
+    const tooLong = "c".repeat(129);
+    const maxMessage = "Passwords can be at most 128 characters.";
+    const setup = setupAdminBodySchema.safeParse({
+      setupCode: "code",
+      name: "Ada",
+      email: "ada@example.com",
+      password: short,
+    });
+    const change = changePasswordBodySchema.safeParse({
+      currentPassword: "current-password",
+      newPassword: short,
+    });
+    const added = createUserBodySchema.safeParse({
+      name: "Ada",
+      email: "ada@example.com",
+      role: "agent",
+      password: short,
+    });
+    const reset = resetPasswordBodySchema.safeParse({ password: short });
+    assert.equal(
+      issueMessage(setup),
+      "Your password needs at least 15 characters.",
+    );
+    assert.equal(
+      issueMessage(change),
+      "Your password needs at least 15 characters.",
+    );
+    assert.equal(
+      issueMessage(added),
+      "The password needs at least 15 characters.",
+    );
+    assert.equal(
+      issueMessage(reset),
+      "The password needs at least 15 characters.",
+    );
+    assert.equal(
+      issueMessage(
+        createUserBodySchema.safeParse({
+          name: "Ada",
+          email: "ada@example.com",
+          role: "agent",
+          password: tooLong,
+        }),
+      ),
+      maxMessage,
+    );
+    assert.equal(
+      issueMessage(resetPasswordBodySchema.safeParse({ password: tooLong })),
+      maxMessage,
+    );
   });
 
   it("[AC-ROLE-20] a password of 15 or more characters on the bundled breached list is rejected", () => {
