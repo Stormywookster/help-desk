@@ -337,24 +337,29 @@ describe("shared schemas", () => {
   });
 
   it("accepts a staff message of 10000 characters and rejects 10001", () => {
-    const message = {
-      visibility: "internal" as const,
-      expectedVersion: 1,
-    };
-    assert.equal(
-      staffMessageBodySchema.safeParse({
-        ...message,
-        body: "s".repeat(10_000),
-      }).success,
-      true,
-    );
-    assert.equal(
-      staffMessageBodySchema.safeParse({
-        ...message,
-        body: "s".repeat(10_001),
-      }).success,
-      false,
-    );
+    const tooLong = "Messages can be at most 10,000 characters.";
+    for (const visibility of ["internal", "public"] as const) {
+      const message = {
+        visibility,
+        expectedVersion: 1,
+      };
+      assert.equal(
+        staffMessageBodySchema.safeParse({
+          ...message,
+          body: "s".repeat(10_000),
+        }).success,
+        true,
+      );
+      assert.equal(
+        issueMessage(
+          staffMessageBodySchema.safeParse({
+            ...message,
+            body: "s".repeat(10_001),
+          }),
+        ),
+        tooLong,
+      );
+    }
   });
 
   it("rejects a file over 10 MB, a sixth file, and a body over 300 MB", () => {
