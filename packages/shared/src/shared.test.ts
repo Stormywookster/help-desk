@@ -17,6 +17,7 @@ import {
   copyCatalog,
   createUserBodySchema,
   customerMessageBodySchema,
+  staffMessageBodySchema,
   formatEventTimeEt,
   generateReference,
   normalizeEmail,
@@ -137,17 +138,24 @@ describe("shared schemas", () => {
   });
 
   it("the bundled common-password list is 15 to 128 characters and rejects a listed entry", () => {
-    assert.equal(COMMON_PASSWORDS.length >= 100, true);
-    const listed = new Set<string>(COMMON_PASSWORDS);
+    assert.equal(COMMON_PASSWORDS.length, 10_898);
+    const listed = new Set<string>(
+      COMMON_PASSWORDS.map((entry) => entry.toLowerCase()),
+    );
     for (const entry of COMMON_PASSWORDS) {
       assert.equal(entry.length >= 15 && entry.length <= 128, true);
     }
     const sample = COMMON_PASSWORDS[0];
     assert.equal(typeof sample, "string");
+    const otherCase = (sample ?? "").toUpperCase();
+    assert.notEqual(otherCase, sample);
     for (const flow of FLOWS) {
       const rejected = checkPassword(sample ?? "", flow);
       assert.equal(rejected.ok, false);
       if (!rejected.ok) assert.equal(rejected.code, "BREACHED");
+      const swapped = checkPassword(otherCase, flow);
+      assert.equal(swapped.ok, false);
+      if (!swapped.ok) assert.equal(swapped.code, "BREACHED");
     }
     const alphabet =
       "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789";
@@ -158,10 +166,10 @@ describe("shared schemas", () => {
         bytes,
         (byte) => alphabet[byte % alphabet.length],
       ).join("");
-      if (!listed.has(fresh)) break;
+      if (!listed.has(fresh.toLowerCase())) break;
     }
     assert.equal(fresh.length, 20);
-    assert.equal(listed.has(fresh), false);
+    assert.equal(listed.has(fresh.toLowerCase()), false);
     for (const flow of FLOWS) {
       assert.deepEqual(checkPassword(fresh, flow), { ok: true });
     }
@@ -324,6 +332,27 @@ describe("shared schemas", () => {
     );
     assert.equal(
       customerMessageBodySchema.safeParse({ body: "r".repeat(10_001) }).success,
+      false,
+    );
+  });
+
+  it("accepts a staff message of 10000 characters and rejects 10001", () => {
+    const message = {
+      visibility: "internal" as const,
+      expectedVersion: 1,
+    };
+    assert.equal(
+      staffMessageBodySchema.safeParse({
+        ...message,
+        body: "s".repeat(10_000),
+      }).success,
+      true,
+    );
+    assert.equal(
+      staffMessageBodySchema.safeParse({
+        ...message,
+        body: "s".repeat(10_001),
+      }).success,
       false,
     );
   });

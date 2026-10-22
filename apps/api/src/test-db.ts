@@ -36,9 +36,12 @@ export function referenceId(): string {
 }
 
 export async function truncateAll(client: PrismaClient): Promise<void> {
-  await client.$executeRawUnsafe(
-    `TRUNCATE TABLE ${APP_TABLES.join(", ")} RESTART IDENTITY CASCADE`,
-  );
+  await client.$transaction(async (tx) => {
+    await tx.$executeRaw`SELECT set_config('helpdesk.purge', 'on', true)`;
+    for (const table of APP_TABLES) {
+      await tx.$executeRawUnsafe(`DELETE FROM ${table}`);
+    }
+  });
 }
 
 export async function createUser(

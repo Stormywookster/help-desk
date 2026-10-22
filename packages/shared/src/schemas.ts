@@ -16,6 +16,7 @@ export const FIELD_LIMITS = {
   subject: 150,
   description: 10_000,
   customerReply: 10_000,
+  staffMessage: 10_000,
   reopenMessage: 10_000,
   cancelReason: 500,
   siteName: 60,
@@ -164,7 +165,7 @@ export const assignTicketBodySchema = z.object({
 });
 
 export const staffMessageBodySchema = z.object({
-  body: z.string().min(1),
+  body: z.string().min(1).max(FIELD_LIMITS.staffMessage),
   visibility: z.enum(["public", "internal"]),
   setStatus: z.enum(["waiting_on_customer", "resolved"]).optional(),
   expectedVersion: expectedVersionSchema,

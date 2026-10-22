@@ -3,7 +3,6 @@ import type { PrismaClient } from "@prisma/client";
 import {
   SEEDED_PRODUCT_NAME,
   SEEDED_PRODUCT_SORT_ORDER,
-  loadExampleEnv,
   resolveSeedSettings,
 } from "./settings.js";
 
@@ -15,7 +14,7 @@ export async function seedDatabase(
   client: PrismaClient,
   env: Record<string, string | undefined> = process.env,
 ): Promise<void> {
-  const values = resolveSeedSettings(env, loadExampleEnv());
+  const values = resolveSeedSettings(env);
   await client.$transaction(async (tx) => {
     if ((await tx.product.count()) === 0) {
       await tx.product.create({

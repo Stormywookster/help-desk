@@ -15,7 +15,6 @@ import {
 
 import { testClock } from "../src/clock.js";
 import { seedDatabase } from "../src/seed.js";
-import { resolveSeedSettings, loadExampleEnv } from "../src/settings.js";
 import {
   APP_TABLES,
   createAudit,
@@ -91,11 +90,11 @@ describe("schema migration", () => {
     const names = new Set(rows.map((row) => row.table_name));
     for (const table of APP_TABLES) assert.ok(names.has(table), table);
     const applied = await prisma.$queryRaw<{ migration_name: string }[]>`
-      SELECT migration_name FROM _prisma_migrations
+      SELECT migration_name FROM _prisma_migrations ORDER BY migration_name
     `;
     assert.deepEqual(
       applied.map((row) => row.migration_name),
-      ["20261022193000_init"],
+      ["20261022193000_init", "20261022200000_history_no_truncate"],
     );
   });
 
@@ -417,6 +416,28 @@ describe("append-only history", () => {
     assert.equal(await prisma.auditLog.count(), 1);
   });
 
+  it("rejects TRUNCATE of history tables even when purge is on", async () => {
+    const product = await createProduct(prisma);
+    const ticket = await createTicket(prisma, product.id);
+    await createMessage(prisma, ticket.id);
+    await createEvent(prisma, ticket.id);
+    await createAudit(prisma);
+    for (const table of ["ticket_events", "ticket_messages", "audit_log"]) {
+      await assert.rejects(() =>
+        prisma.$executeRawUnsafe(`TRUNCATE TABLE ${table}`),
+      );
+      await assert.rejects(() =>
+        prisma.$transaction(async (tx) => {
+          await tx.$executeRaw`SELECT set_config('helpdesk.purge', 'on', true)`;
+          await tx.$executeRawUnsafe(`TRUNCATE TABLE ${table}`);
+        }),
+      );
+    }
+    assert.equal(await prisma.ticketEvent.count(), 1);
+    assert.equal(await prisma.ticketMessage.count(), 1);
+    assert.equal(await prisma.auditLog.count(), 1);
+  });
+
   it("[AC-AUD-19] a direct edit or delete of a history entry is denied", async () => {
     const user = await createUser(prisma, { role: "agent" });
     const product = await createProduct(prisma);
@@ -463,16 +484,15 @@ describe("fresh installation seed", () => {
 
   it("[AC-GEN-12] a fresh installation stores the branding placeholders", async () => {
     await seedDatabase(prisma, {});
-    const expected = resolveSeedSettings({}, loadExampleEnv());
     const rows = await prisma.setting.findMany();
     const stored = Object.fromEntries(rows.map((row) => [row.key, row.value]));
-    assert.equal(stored.site_name, expected.site_name);
-    assert.equal(stored.company_name, expected.company_name);
+    assert.equal(stored.site_name, ["Help", "Desk"].join(" "));
+    assert.equal(stored.company_name, ["Your", "Company"].join(" "));
     assert.equal(stored.brand_primary_color, "#2563EB");
     assert.equal(stored.brand_logo_key, "");
     assert.equal(stored.portal_footer_text, "");
-    assert.equal(stored.email_from_name, expected.email_from_name);
-    assert.equal(stored.support_email_display, expected.email_from_address);
+    assert.equal(stored.email_from_name, ["Help", "Desk"].join(" "));
+    assert.equal(stored.support_email_display, "you@example.com");
   });
 
   it("is idempotent and does not undo an admin change", async () => {
