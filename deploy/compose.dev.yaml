@@ -4,6 +4,9 @@ name: helpdesk-dev
 services:
   db:
     image: postgres:17
+    # POSTGRES_USER is only the bootstrap superuser. init-test-db.sql creates
+    # helpdesk_owner (NOSUPERUSER, owns the databases, runs migrations) and
+    # helpdesk_app (the API login, owns nothing).
     environment:
       POSTGRES_DB: helpdesk
       POSTGRES_USER: helpdesk

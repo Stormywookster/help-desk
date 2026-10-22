@@ -35,6 +35,68 @@ export function referenceId(): string {
   return `HD-${body}`;
 }
 
+function quoteLiteral(value: string): string {
+  return `'${value.replaceAll("'", "''")}'`;
+}
+
+function quoteIdent(value: string): string {
+  return `"${value.replaceAll('"', '""')}"`;
+}
+
+/**
+ * Migration role and API role. Passwords come from the caller, never from source.
+ * The caller must be the bootstrap superuser. helpdesk_owner is not a superuser.
+ * Keep the attributes in sync with deploy/postgres/init-test-db.sql.
+ */
+export async function ensurePrivilegeRoles(
+  client: PrismaClient,
+  ownerPassword: string,
+  appPassword: string,
+): Promise<void> {
+  const ownerLiteral = quoteLiteral(ownerPassword);
+  const appLiteral = quoteLiteral(appPassword);
+  await client.$executeRawUnsafe(`
+    DO $roles$
+    BEGIN
+      IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'helpdesk_owner') THEN
+        CREATE ROLE helpdesk_owner LOGIN NOSUPERUSER NOCREATEROLE NOBYPASSRLS PASSWORD ${ownerLiteral};
+      ELSE
+        ALTER ROLE helpdesk_owner WITH LOGIN NOSUPERUSER NOCREATEROLE NOBYPASSRLS PASSWORD ${ownerLiteral};
+      END IF;
+      IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'helpdesk_app') THEN
+        CREATE ROLE helpdesk_app LOGIN NOSUPERUSER NOBYPASSRLS NOINHERIT PASSWORD ${appLiteral};
+      ELSE
+        ALTER ROLE helpdesk_app WITH LOGIN NOSUPERUSER NOBYPASSRLS NOINHERIT PASSWORD ${appLiteral};
+      END IF;
+    END
+    $roles$;
+  `);
+}
+
+/** The current database is owned by the migration role. Caller is the superuser. */
+export async function assignDatabaseOwner(client: PrismaClient): Promise<void> {
+  const rows = await client.$queryRaw<{ name: string }[]>`
+    SELECT current_database() AS name
+  `;
+  const name = rows[0]?.name;
+  if (!name || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) {
+    throw new Error("Unexpected database name");
+  }
+  await client.$executeRawUnsafe(
+    `ALTER DATABASE ${quoteIdent(name)} OWNER TO helpdesk_owner`,
+  );
+}
+
+/**
+ * Schema ownership and the trusted extensions. Call this again after dropping
+ * public, because that drop removes citext and pgcrypto.
+ */
+export async function preparePublicSchema(client: PrismaClient): Promise<void> {
+  await client.$executeRawUnsafe(`ALTER SCHEMA public OWNER TO helpdesk_owner`);
+  await client.$executeRawUnsafe(`CREATE EXTENSION IF NOT EXISTS citext`);
+  await client.$executeRawUnsafe(`CREATE EXTENSION IF NOT EXISTS pgcrypto`);
+}
+
 export async function truncateAll(client: PrismaClient): Promise<void> {
   await client.$transaction(async (tx) => {
     await tx.$executeRaw`SELECT set_config('helpdesk.purge', 'on', true)`;
