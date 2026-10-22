@@ -300,7 +300,7 @@ The DoD for **every** task also includes: `npm run verify` green locally; CI `pr
 #### M1-T01: Shared domain: statuses, transition function, permissions
 - **Scope:** `packages/shared`: seven statuses, actor × from × action transition table (ARCHITECTURE §4, T1 read-only rule, T13 staff cancel). Every transition also returns its `needs_attention` effect, `set` / `clear(reason)` / `unchanged`, and every move into `closed` or `cancelled` carries `clear` (T34, T35). Reasons include `staff_reply`, `staff_status_change`, `marked_seen`, `auto_closed`, `customer_cancelled`, and `staff_cancelled`. permission matrix (Admin/Agent/customer session/anonymous), reopen-window and due-time arithmetic (DST-safe, ET), constants (limits from ARCHITECTURE §14). Exhaustive unit tests, one per matrix row.
 - **Depends on:** M0-T04 | **Parallel:** ∥ M1-T02
-- **ACs:** AC-LC-07 AC-LC-33 AC-LC-34 AC-LC-40 AC-LC-51 AC-CLOSE-14 AC-CLOSE-15 AC-CLOSE-17
+- **ACs:** AC-LC-07 AC-LC-33 AC-LC-34 AC-LC-40 AC-LC-51 AC-CLOSE-14 AC-CLOSE-15 AC-CLOSE-17 AC-LC-79
 - **DoD:** Every matrix row has a unit test titled with its AC tag; 100% branch coverage of the transition function. A unit test enumerates the whole table and asserts that every transition into `closed`/`cancelled` returns `clear`, and that `new` → `open` (accept/assign) returns `clear` (T35).
 - **Verification:** `npm run test -w packages/shared` output; ac-report shows the listed ACs at unit layer.
 - **Reviewers:** QA, Architect
@@ -1104,10 +1104,10 @@ Only the steps the docs say a person must do, at the latest moment they're neede
 | AC-CLOSE-11 | M2-T07 | — |  |
 | AC-CLOSE-12 | M1-T03 | — |  |
 | AC-CLOSE-13 | M2-T07 | M4-T05 |  |
-| AC-CLOSE-14 | M1-T01 | — |  |
-| AC-CLOSE-15 | M1-T01 | — |  |
+| AC-CLOSE-14 | M1-T01 | M2-T07, M5-T03 |  |
+| AC-CLOSE-15 | M1-T01 | M2-T07, M5-T03 |  |
 | AC-CLOSE-16 | M3-T02 | M5-T05, M8-T02 |  |
-| AC-CLOSE-17 | M1-T01 | — |  |
+| AC-CLOSE-17 | M1-T01 | M2-T07, M5-T03 |  |
 | AC-CLOSE-18 | M2-T07 | — |  |
 | AC-CLOSE-19 | M5-T03 | — |  |
 | AC-CLOSE-20 | M5-T03 | — |  |
@@ -1293,6 +1293,7 @@ Only the steps the docs say a person must do, at the latest moment they're neede
 | AC-LC-76 | M6-T01 | — |  |
 | AC-LC-77 | M6-T01 | — |  |
 | AC-LC-78 | M6-T01 | — |  |
+| AC-LC-79 | M1-T01 | — |  |
 | AC-LINK-01 | M4-T03 | — |  |
 | AC-LINK-02 | M2-T04 | M4-T03 |  |
 | AC-LINK-03 | M2-T04 | — |  |
