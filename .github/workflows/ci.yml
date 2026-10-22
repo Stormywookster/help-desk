@@ -62,6 +62,8 @@ jobs:
           --health-retries 5
     env:
       DATABASE_URL: postgres://helpdesk:change-me@localhost:5432/helpdesk_test
+      MIGRATE_DATABASE_URL: postgres://helpdesk_owner:change-me@localhost:5432/helpdesk_test
+      APP_DATABASE_URL: postgres://helpdesk_app:change-me@localhost:5432/helpdesk_test
       SCANNER: fake
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -126,6 +128,8 @@ jobs:
           - 3310:3310
     env:
       DATABASE_URL: postgres://helpdesk:change-me@localhost:5432/helpdesk_test
+      MIGRATE_DATABASE_URL: postgres://helpdesk_owner:change-me@localhost:5432/helpdesk_test
+      APP_DATABASE_URL: postgres://helpdesk_app:change-me@localhost:5432/helpdesk_test
       SCANNER: fake
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

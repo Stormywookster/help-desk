@@ -23,6 +23,7 @@ import {
   createProduct,
   createTicket,
   createUser,
+  ensurePrivilegeRoles,
   truncateAll,
 } from "../src/test-db.js";
 
@@ -30,10 +31,27 @@ const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "../../..");
 const schema = "apps/api/prisma/schema.prisma";
 const databaseUrl = process.env.DATABASE_URL;
 
-function runPrisma(args: string[], input?: string): void {
+function roleUrl(base: string, user: string): string {
+  const url = new URL(base);
+  url.username = user;
+  return url.toString();
+}
+
+function passwordOf(url: string): string {
+  return decodeURIComponent(new URL(url).password);
+}
+
+const ownerUrl =
+  process.env.MIGRATE_DATABASE_URL ??
+  (databaseUrl ? roleUrl(databaseUrl, "helpdesk_owner") : "");
+const appUrl =
+  process.env.APP_DATABASE_URL ??
+  (databaseUrl ? roleUrl(databaseUrl, "helpdesk_app") : "");
+
+function runPrisma(args: string[], input?: string, url = ownerUrl): void {
   execFileSync(join(repoRoot, "node_modules/.bin/prisma"), args, {
     cwd: repoRoot,
-    env: process.env,
+    env: { ...process.env, DATABASE_URL: url },
     input,
     encoding: "utf8",
     stdio: ["pipe", "pipe", "pipe"],
@@ -57,14 +75,33 @@ function emptyDatabase(): void {
 }
 
 let prisma: PrismaClient;
+let app: PrismaClient;
+
+function permissionDenied(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  assert.match(message, /permission denied/i);
+  assert.doesNotMatch(message, /append-only/);
+  return true;
+}
 
 beforeAll(async () => {
-  if (!databaseUrl) {
+  if (!databaseUrl || !ownerUrl || !appUrl) {
     throw new Error("DATABASE_URL is required for schema integration tests");
+  }
+  const bootstrap = new PrismaClient({ datasourceUrl: databaseUrl });
+  try {
+    await ensurePrivilegeRoles(
+      bootstrap,
+      passwordOf(ownerUrl),
+      passwordOf(appUrl),
+    );
+  } finally {
+    await bootstrap.$disconnect();
   }
   emptyDatabase();
   deploy();
-  prisma = new PrismaClient();
+  prisma = new PrismaClient({ datasourceUrl: ownerUrl });
+  app = new PrismaClient({ datasourceUrl: appUrl });
 }, 60_000);
 
 beforeEach(async () => {
@@ -77,6 +114,7 @@ afterEach(() => {
 });
 
 afterAll(async () => {
+  await app?.$disconnect();
   await prisma?.$disconnect();
 });
 
@@ -94,7 +132,11 @@ describe("schema migration", () => {
     `;
     assert.deepEqual(
       applied.map((row) => row.migration_name),
-      ["20261022193000_init", "20261022200000_history_no_truncate"],
+      [
+        "20261022193000_init",
+        "20261022200000_history_no_truncate",
+        "20261022210000_purge_privileges",
+      ],
     );
   });
 
@@ -526,5 +568,350 @@ describe("fresh installation seed", () => {
       ).value,
       "",
     );
+  });
+});
+
+describe("purge privileges", () => {
+  function quoteLiteral(value: string): string {
+    return `'${value.replaceAll("'", "''")}'`;
+  }
+
+  async function ensureOtherRole(): Promise<void> {
+    const literal = quoteLiteral(passwordOf(appUrl));
+    await prisma.$executeRawUnsafe(`
+      DO $roles$
+      BEGIN
+        IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'helpdesk_other') THEN
+          CREATE ROLE helpdesk_other LOGIN NOSUPERUSER NOINHERIT PASSWORD ${literal};
+        ELSE
+          ALTER ROLE helpdesk_other WITH LOGIN NOSUPERUSER NOINHERIT PASSWORD ${literal};
+        END IF;
+      END
+      $roles$;
+    `);
+  }
+
+  it("keeps ownership, execute grants, and the truncate triggers", async () => {
+    const owners = await prisma.$queryRaw<{ relname: string; owner: string }[]>`
+      SELECT c.relname, r.rolname AS owner
+      FROM pg_class AS c
+      JOIN pg_namespace AS n ON n.oid = c.relnamespace
+      JOIN pg_roles AS r ON r.oid = c.relowner
+      WHERE n.nspname = 'public' AND c.relkind = 'r' AND c.relname = 'audit_log'
+    `;
+    assert.equal(owners[0]?.owner, "helpdesk_owner");
+    const appOwned = await prisma.$queryRaw<{ count: number }[]>`
+      SELECT count(*)::int AS count
+      FROM pg_class AS c
+      JOIN pg_roles AS r ON r.oid = c.relowner
+      WHERE r.rolname = 'helpdesk_app' AND c.relkind = 'r'
+    `;
+    assert.equal(appOwned[0]?.count, 0);
+    const privileges = await prisma.$queryRaw<
+      {
+        app_delete: boolean;
+        app_truncate: boolean;
+        app_update: boolean;
+        app_execute: boolean;
+      }[]
+    >`
+      SELECT
+        has_table_privilege('helpdesk_app', 'audit_log', 'DELETE') AS app_delete,
+        has_table_privilege('helpdesk_app', 'audit_log', 'TRUNCATE') AS app_truncate,
+        has_table_privilege('helpdesk_app', 'audit_log', 'UPDATE') AS app_update,
+        has_function_privilege(
+          'helpdesk_app',
+          'helpdesk_purge_ticket(uuid,uuid)',
+          'EXECUTE'
+        ) AS app_execute
+    `;
+    assert.equal(privileges[0]?.app_delete, false);
+    assert.equal(privileges[0]?.app_truncate, false);
+    assert.equal(privileges[0]?.app_update, false);
+    assert.equal(privileges[0]?.app_execute, true);
+    const functions = await prisma.$queryRaw<
+      {
+        name: string;
+        owner: string;
+        security_definer: boolean;
+        config: string[] | null;
+      }[]
+    >`
+      SELECT p.proname AS name, r.rolname AS owner, p.prosecdef AS security_definer, p.proconfig AS config
+      FROM pg_proc AS p
+      JOIN pg_roles AS r ON r.oid = p.proowner
+      WHERE p.proname IN ('helpdesk_purge_ticket', 'helpdesk_erase_customer')
+      ORDER BY p.proname
+    `;
+    assert.equal(functions.length, 2);
+    for (const fn of functions) {
+      assert.equal(fn.owner, "helpdesk_owner");
+      assert.equal(fn.security_definer, true);
+      assert.ok(
+        fn.config?.some((entry) => entry === "search_path=pg_catalog, public"),
+      );
+    }
+    const truncateTriggers = await prisma.$queryRaw<{ count: number }[]>`
+      SELECT count(*)::int AS count
+      FROM pg_trigger
+      WHERE tgname IN (
+        'ticket_events_append_only_truncate',
+        'ticket_messages_append_only_truncate',
+        'audit_log_append_only_truncate'
+      ) AND NOT tgisinternal
+    `;
+    assert.equal(truncateTriggers[0]?.count, 3);
+  });
+
+  it("allows an audit update of only data and ip while purge is on", async () => {
+    const audit = await createAudit(prisma, { ip: "203.0.113.8" });
+    const createdAt = audit.created_at;
+    await assert.rejects(
+      () =>
+        prisma.$executeRaw`UPDATE audit_log SET data = ${JSON.stringify({ reference: "HD-234567", messages: 1 })}::jsonb WHERE id = ${audit.id}`,
+    );
+    await prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT set_config('helpdesk.purge', 'on', true)`;
+      await tx.$executeRaw`
+        UPDATE audit_log
+        SET data = ${JSON.stringify({ reference: "HD-234567", messages: 1 })}::jsonb,
+            ip = NULL
+        WHERE id = ${audit.id}
+      `;
+    });
+    const updated = await prisma.auditLog.findUniqueOrThrow({
+      where: { id: audit.id },
+    });
+    assert.equal(updated.action, "ticket.hard_deleted");
+    assert.equal(updated.actor_user_id, null);
+    assert.equal(updated.created_at.toISOString(), createdAt.toISOString());
+    assert.equal(updated.ip, null);
+    assert.deepEqual(updated.data, { reference: "HD-234567", messages: 1 });
+    await assert.rejects(() =>
+      prisma.$transaction(async (tx) => {
+        await tx.$executeRaw`SELECT set_config('helpdesk.purge', 'on', true)`;
+        await tx.$executeRaw`UPDATE audit_log SET action = 'tampered' WHERE id = ${audit.id}`;
+      }),
+    );
+    assert.equal(
+      (await prisma.auditLog.findUniqueOrThrow({ where: { id: audit.id } }))
+        .action,
+      "ticket.hard_deleted",
+    );
+  });
+
+  it("denies direct history deletes, truncates, and audit updates from the app role", async () => {
+    const product = await createProduct(app);
+    const ticket = await createTicket(app, product.id);
+    const message = await createMessage(app, ticket.id);
+    const event = await createEvent(app, ticket.id);
+    const audit = await createAudit(app, { ip: "203.0.113.9" });
+    const statements = [
+      `DELETE FROM ticket_events WHERE id = ${event.id}`,
+      `DELETE FROM ticket_messages WHERE id = '${message.id}'`,
+      `DELETE FROM audit_log WHERE id = ${audit.id}`,
+      `TRUNCATE TABLE ticket_events`,
+      `TRUNCATE TABLE ticket_messages`,
+      `TRUNCATE TABLE audit_log`,
+      `UPDATE audit_log SET action = 'tampered' WHERE id = ${audit.id}`,
+    ];
+    for (const statement of statements) {
+      await assert.rejects(
+        () =>
+          app.$transaction(async (tx) => {
+            await tx.$executeRaw`SELECT set_config('helpdesk.purge', 'on', true)`;
+            await tx.$executeRawUnsafe(statement);
+          }),
+        permissionDenied,
+      );
+    }
+    assert.equal(await app.ticketEvent.count(), 1);
+    assert.equal(await app.ticketMessage.count(), 1);
+    assert.equal(await app.auditLog.count(), 1);
+    assert.equal(
+      (await app.auditLog.findUniqueOrThrow({ where: { id: audit.id } }))
+        .action,
+      "ticket.hard_deleted",
+    );
+  });
+
+  it("purges one ticket through helpdesk_app and writes a content-free audit row", async () => {
+    const user = await createUser(app, { role: "administrator" });
+    const product = await createProduct(app);
+    const ticket = await createTicket(app, product.id, {
+      customer_email: "ada@example.com",
+      customer_name: "Ada Customer",
+      subject: "Printer jam",
+      description: "Paper is stuck.",
+    });
+    await createMessage(app, ticket.id, { body: "Still stuck." });
+    await createEvent(app, ticket.id);
+    const before = await app.auditLog.count();
+    await app.$executeRaw`SELECT helpdesk_purge_ticket(${ticket.id}::uuid, ${user.id}::uuid)`;
+    assert.equal(await app.ticket.count(), 0);
+    assert.equal(await app.ticketMessage.count(), 0);
+    assert.equal(await app.ticketEvent.count(), 0);
+    assert.equal(await app.auditLog.count(), before + 1);
+    const row = await app.auditLog.findFirstOrThrow({
+      where: { action: "ticket.hard_deleted", actor_user_id: user.id },
+    });
+    const data = row.data as {
+      references: string[];
+      tickets: number;
+      messages: number;
+      events: number;
+      attachments: number;
+    };
+    assert.deepEqual(data.references, [ticket.reference]);
+    assert.equal(data.tickets, 1);
+    assert.equal(data.messages, 1);
+    assert.equal(data.events, 1);
+    assert.equal(data.attachments, 0);
+    const serialized = JSON.stringify(data);
+    assert.equal(serialized.includes("ada@example.com"), false);
+    assert.equal(serialized.includes("Ada Customer"), false);
+    assert.equal(serialized.includes("Printer jam"), false);
+    assert.equal(serialized.includes("Paper is stuck."), false);
+    assert.equal(serialized.includes("Still stuck."), false);
+  });
+
+  it("erases a customer through helpdesk_app and redacts audit rows in place", async () => {
+    const user = await createUser(app, { role: "administrator" });
+    const product = await createProduct(app);
+    const ada = await createTicket(app, product.id, {
+      customer_email: "ada@example.com",
+      customer_name: "Ada Customer",
+      subject: "Printer jam",
+    });
+    const bob = await createTicket(app, product.id, {
+      customer_email: "bob@example.com",
+      customer_name: "Bob Other",
+      reference: "HD-B2B234",
+    });
+    await createMessage(app, ada.id, { body: "Ada's reply" });
+    const customerAudit = await createAudit(app, {
+      action: "customer.note",
+      ip: "203.0.113.5",
+      data: {
+        customer_email: "ada@example.com",
+        customer_name: "Ada Customer",
+        subject: "Printer jam",
+        note: "the long complaint",
+        reference: ada.reference,
+        messages: 2,
+      },
+    });
+    const staffAudit = await createAudit(app, {
+      actor_user_id: user.id,
+      action: "staff.note",
+      ip: "192.0.2.10",
+      data: {
+        customer_email: "ada@example.com",
+        note: "staff saw ada@example.com",
+        reference: ada.reference,
+        messages: 1,
+      },
+    });
+    const otherAudit = await createAudit(app, {
+      actor_user_id: user.id,
+      action: "other.note",
+      ip: "198.51.100.4",
+      data: {
+        customer_email: "bob@example.com",
+        reference: bob.reference,
+        messages: 1,
+      },
+    });
+    const before = await app.auditLog.count();
+    await app.$executeRaw`SELECT helpdesk_erase_customer(${"ada@example.com"}::citext, ${user.id}::uuid)`;
+
+    assert.equal(await app.ticket.count({ where: { id: ada.id } }), 0);
+    assert.equal(
+      await app.ticketMessage.count({ where: { ticket_id: ada.id } }),
+      0,
+    );
+    assert.equal(
+      (await app.ticket.findUniqueOrThrow({ where: { id: bob.id } }))
+        .customer_email,
+      "bob@example.com",
+    );
+    assert.equal(await app.auditLog.count(), before + 1);
+
+    const redactedCustomer = await app.auditLog.findUniqueOrThrow({
+      where: { id: customerAudit.id },
+    });
+    const customerData = redactedCustomer.data as Record<string, unknown>;
+    assert.equal(redactedCustomer.action, "customer.note");
+    assert.equal(redactedCustomer.actor_user_id, null);
+    assert.equal(
+      redactedCustomer.created_at.toISOString(),
+      customerAudit.created_at.toISOString(),
+    );
+    assert.equal(redactedCustomer.ip, null);
+    assert.equal(customerData.customer_email, "[redacted]");
+    assert.equal(customerData.customer_name, "[redacted]");
+    assert.equal(customerData.subject, "[redacted]");
+    assert.equal(customerData.note, "[redacted]");
+    assert.equal(customerData.reference, ada.reference);
+    assert.equal(customerData.messages, 2);
+    assert.equal(typeof customerData.redacted_at, "string");
+
+    const redactedStaff = await app.auditLog.findUniqueOrThrow({
+      where: { id: staffAudit.id },
+    });
+    const staffData = redactedStaff.data as Record<string, unknown>;
+    assert.equal(redactedStaff.actor_user_id, user.id);
+    assert.equal(redactedStaff.action, "staff.note");
+    assert.match(String(redactedStaff.ip), /^192\.0\.2\.10/);
+    assert.equal(staffData.customer_email, "[redacted]");
+    assert.equal(staffData.note, "[redacted]");
+    assert.equal(staffData.reference, ada.reference);
+    assert.equal(staffData.messages, 1);
+    assert.equal(typeof staffData.redacted_at, "string");
+
+    const untouched = await app.auditLog.findUniqueOrThrow({
+      where: { id: otherAudit.id },
+    });
+    assert.deepEqual(untouched.data, otherAudit.data);
+    assert.match(String(untouched.ip), /^198\.51\.100\.4/);
+    assert.equal(JSON.stringify(untouched.data).includes("redacted_at"), false);
+
+    const erased = await app.auditLog.findFirstOrThrow({
+      where: { action: "customer.erased" },
+    });
+    const erasedData = erased.data as {
+      references: string[];
+      tickets: number;
+      messages: number;
+    };
+    assert.equal(erased.actor_user_id, user.id);
+    assert.deepEqual(erasedData.references, [ada.reference]);
+    assert.equal(erasedData.tickets, 1);
+    assert.equal(erasedData.messages, 1);
+    const erasedText = JSON.stringify(erasedData);
+    assert.equal(erasedText.includes("ada@example.com"), false);
+    assert.equal(erasedText.includes("Ada Customer"), false);
+    assert.equal(erasedText.includes("Printer jam"), false);
+  });
+
+  it("denies direct execution by a role other than helpdesk_app", async () => {
+    await ensureOtherRole();
+    const other = new PrismaClient({
+      datasourceUrl: roleUrl(appUrl, "helpdesk_other"),
+    });
+    try {
+      await assert.rejects(
+        () =>
+          other.$queryRaw`SELECT helpdesk_purge_ticket(${"00000000-0000-7000-8000-000000000001"}::uuid, ${"00000000-0000-7000-8000-000000000002"}::uuid)`,
+        permissionDenied,
+      );
+      await assert.rejects(
+        () =>
+          other.$queryRaw`SELECT helpdesk_erase_customer(${"ada@example.com"}::citext, ${"00000000-0000-7000-8000-000000000002"}::uuid)`,
+        permissionDenied,
+      );
+    } finally {
+      await other.$disconnect();
+    }
   });
 });

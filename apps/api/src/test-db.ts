@@ -35,6 +35,36 @@ export function referenceId(): string {
   return `HD-${body}`;
 }
 
+function quoteLiteral(value: string): string {
+  return `'${value.replaceAll("'", "''")}'`;
+}
+
+/** Migration role and API role. Passwords come from the caller, never from source. */
+export async function ensurePrivilegeRoles(
+  client: PrismaClient,
+  ownerPassword: string,
+  appPassword: string,
+): Promise<void> {
+  const ownerLiteral = quoteLiteral(ownerPassword);
+  const appLiteral = quoteLiteral(appPassword);
+  await client.$executeRawUnsafe(`
+    DO $roles$
+    BEGIN
+      IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'helpdesk_owner') THEN
+        CREATE ROLE helpdesk_owner LOGIN SUPERUSER PASSWORD ${ownerLiteral};
+      ELSE
+        ALTER ROLE helpdesk_owner WITH LOGIN SUPERUSER PASSWORD ${ownerLiteral};
+      END IF;
+      IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'helpdesk_app') THEN
+        CREATE ROLE helpdesk_app LOGIN NOSUPERUSER NOINHERIT PASSWORD ${appLiteral};
+      ELSE
+        ALTER ROLE helpdesk_app WITH LOGIN NOSUPERUSER NOINHERIT PASSWORD ${appLiteral};
+      END IF;
+    END
+    $roles$;
+  `);
+}
+
 export async function truncateAll(client: PrismaClient): Promise<void> {
   await client.$transaction(async (tx) => {
     await tx.$executeRaw`SELECT set_config('helpdesk.purge', 'on', true)`;
