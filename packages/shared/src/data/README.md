@@ -24,7 +24,7 @@ Applied in source order, with no added entries:
 
 - Drop blank lines.
 - Keep an entry when its length is 15 to 128 characters. Length is JavaScript UTF-16 code units, the same length `checkPassword` uses.
-- Deduplicate case-insensitively, keeping the first spelling in the source.
+- Deduplicate case-insensitively, keeping the first spelling in the source. `checkPassword` lowercases both the password and these entries before comparing, so a different-case spelling of a kept entry is rejected.
 
 ## Count
 

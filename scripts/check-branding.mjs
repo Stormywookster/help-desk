@@ -19,7 +19,13 @@ const EXTS = new Set([
   ".json",
   ".txt",
 ]);
-const SKIP_FILES = new Set(["deploy/env.example", "package-lock.json"]);
+const SKIP_FILES = new Set([
+  "deploy/env.example",
+  "package-lock.json",
+  // First-start placeholders bundled with the app (AC-GEN-12). Same strings
+  // as deploy/env.example, so a production image does not read that file.
+  "apps/api/src/settings-defaults.json",
+]);
 
 export function placeholderNames(exampleText) {
   return ["BRAND_SITE_NAME", "BRAND_COMPANY_NAME"].map((key) => {

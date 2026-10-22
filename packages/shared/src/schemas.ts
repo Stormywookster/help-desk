@@ -16,6 +16,7 @@ export const FIELD_LIMITS = {
   subject: 150,
   description: 10_000,
   customerReply: 10_000,
+  staffMessage: 10_000,
   reopenMessage: 10_000,
   cancelReason: 500,
   siteName: 60,
@@ -23,6 +24,9 @@ export const FIELD_LIMITS = {
   idempotencyKeyMin: 16,
   idempotencyKeyMax: 64,
 } as const;
+
+/** T50. Shown when a staff message body is over the cap. */
+const STAFF_MESSAGE_TOO_LONG = "Messages can be at most 10,000 characters.";
 
 /** Binary units (T21). */
 export const ATTACHMENT_DEFAULT_MAX_BYTES = 10_485_760;
@@ -164,7 +168,10 @@ export const assignTicketBodySchema = z.object({
 });
 
 export const staffMessageBodySchema = z.object({
-  body: z.string().min(1),
+  body: z
+    .string()
+    .min(1)
+    .max(FIELD_LIMITS.staffMessage, STAFF_MESSAGE_TOO_LONG),
   visibility: z.enum(["public", "internal"]),
   setStatus: z.enum(["waiting_on_customer", "resolved"]).optional(),
   expectedVersion: expectedVersionSchema,

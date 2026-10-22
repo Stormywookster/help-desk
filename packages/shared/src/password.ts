@@ -24,7 +24,9 @@ export type PasswordDecision =
   | { ok: false; code: "TOO_LONG"; message: string }
   | { ok: false; code: "BREACHED"; message: string };
 
-const BREACHED = new Set<string>(COMMON_PASSWORDS);
+const BREACHED = new Set<string>(
+  COMMON_PASSWORDS.map((entry) => entry.toLowerCase()),
+);
 
 export function passwordPolicy(): {
   minLength: number;
@@ -81,7 +83,11 @@ function breachedMessage(flow: PasswordFlow): string {
   return "That password is too common or has appeared in a data breach. Choose a different one.";
 }
 
-/** Exact list membership. Length is UTF-16 code units, which matches the ASCII boundaries. */
+/**
+ * List membership is case-insensitive: both the password and the bundled
+ * entries are lowercased. Length is UTF-16 code units, which matches the
+ * ASCII boundaries.
+ */
 export function checkPassword(
   password: string,
   flow: PasswordFlow,
@@ -92,7 +98,7 @@ export function checkPassword(
   if (password.length > PASSWORD_MAX_LENGTH) {
     return { ok: false, code: "TOO_LONG", message: tooLongMessage(flow) };
   }
-  if (BREACHED.has(password)) {
+  if (BREACHED.has(password.toLowerCase())) {
     return { ok: false, code: "BREACHED", message: breachedMessage(flow) };
   }
   return { ok: true };

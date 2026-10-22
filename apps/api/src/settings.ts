@@ -1,7 +1,7 @@
 /**
  * First-start settings from ARCHITECTURE §5.
- * Placeholder names are read from deploy/env.example or the process environment.
- * They are not written as literals here: the branding check forbids that.
+ * Placeholder strings live in settings-defaults.json, which ships with the
+ * app. Environment variables still override them on first start.
  */
 
 import { readFileSync } from "node:fs";
@@ -17,64 +17,83 @@ export const REOPEN_WINDOW_DAYS_DEFAULT = 14;
 export const ATTACHMENT_MAX_BYTES_DEFAULT = 10_485_760;
 export const ATTACHMENT_MAX_FILES_DEFAULT = 5;
 
-export const EXAMPLE_ENV_PATH = join(
+export const SETTINGS_DEFAULTS_PATH = join(
   dirname(fileURLToPath(import.meta.url)),
-  "../../../deploy/env.example",
+  "settings-defaults.json",
 );
 
-export function exampleValue(exampleText: string, key: string): string {
-  const line = exampleText
-    .split("\n")
-    .find((entry) => entry.startsWith(`${key}=`));
-  if (line === undefined) {
-    throw new Error(`missing ${key} in the example environment`);
-  }
-  const raw = line.slice(key.length + 1);
-  const commentAt = raw.search(/[ \t]#/);
-  return (commentAt === -1 ? raw : raw.slice(0, commentAt)).trim();
-}
+export type BundledDefaults = {
+  email_from_name: string;
+  email_from_address: string;
+  site_name: string;
+  company_name: string;
+  brand_primary_color: string;
+  privacy_notice_enabled: boolean;
+};
 
-export function loadExampleEnv(path: string = EXAMPLE_ENV_PATH): string {
-  return readFileSync(path, "utf8");
+export function loadBundledDefaults(
+  path: string = SETTINGS_DEFAULTS_PATH,
+): BundledDefaults {
+  return JSON.parse(readFileSync(path, "utf8")) as BundledDefaults;
 }
 
 export type SeedSettingValue = string | number | boolean;
 
-export function resolveSeedSettings(
+function overridden(
   env: Record<string, string | undefined>,
-  exampleText: string,
-): Record<string, SeedSettingValue> {
-  const fromEnvOrExample = (key: string): string => {
-    const value = env[key];
-    if (value !== undefined && value !== "") return value;
-    return exampleValue(exampleText, key);
-  };
+  key: string,
+  fallback: string,
+): string {
+  const value = env[key];
+  if (value !== undefined && value !== "") return value;
+  return fallback;
+}
 
-  const fromAddress = fromEnvOrExample("EMAIL_FROM_ADDRESS");
-  const privacy = fromEnvOrExample("PRIVACY_NOTICE_ENABLED");
-  if (privacy !== "true" && privacy !== "false") {
-    throw new Error("PRIVACY_NOTICE_ENABLED must be true or false");
+export function resolveSeedSettings(
+  env: Record<string, string | undefined> = process.env,
+  bundled: BundledDefaults = loadBundledDefaults(),
+): Record<string, SeedSettingValue> {
+  const fromAddress = overridden(
+    env,
+    "EMAIL_FROM_ADDRESS",
+    bundled.email_from_address,
+  );
+  const privacyText = env.PRIVACY_NOTICE_ENABLED;
+  let privacy = bundled.privacy_notice_enabled;
+  if (privacyText !== undefined && privacyText !== "") {
+    if (privacyText !== "true" && privacyText !== "false") {
+      throw new Error("PRIVACY_NOTICE_ENABLED must be true or false");
+    }
+    privacy = privacyText === "true";
   }
 
-  const color = fromEnvOrExample("BRAND_PRIMARY_COLOR");
+  const color = overridden(
+    env,
+    "BRAND_PRIMARY_COLOR",
+    bundled.brand_primary_color,
+  );
   if (!COLOR_PATTERN.test(color)) {
     throw new Error("BRAND_PRIMARY_COLOR must match #RRGGBB");
   }
 
   return {
-    email_from_name: fromEnvOrExample("EMAIL_FROM_NAME"),
+    email_from_name: overridden(
+      env,
+      "EMAIL_FROM_NAME",
+      bundled.email_from_name,
+    ),
     email_from_address: fromAddress,
     email_reply_to: fromAddress,
     reopen_window_days: REOPEN_WINDOW_DAYS_DEFAULT,
     attachment_max_bytes: ATTACHMENT_MAX_BYTES_DEFAULT,
     attachment_max_files: ATTACHMENT_MAX_FILES_DEFAULT,
-    site_name: fromEnvOrExample("BRAND_SITE_NAME"),
-    company_name: fromEnvOrExample("BRAND_COMPANY_NAME"),
+    site_name: overridden(env, "BRAND_SITE_NAME", bundled.site_name),
+    company_name: overridden(env, "BRAND_COMPANY_NAME", bundled.company_name),
     brand_logo_key: "",
     brand_primary_color: color,
     portal_footer_text: "",
     support_email_display: fromAddress,
-    privacy_notice_enabled: privacy === "true",
+    privacy_notice_enabled: privacy,
     privacy_notice_text: "",
     privacy_notice_version: "",
   };
